@@ -39,10 +39,14 @@ function appendLog(line: string): void {
 
 /** globalState 键：用户点击「不再提示」后置 true，持久静默桥接降级警告 */
 const BRIDGE_SILENCE_KEY = 'dsh.bridgeWarningSilenced';
-/** 握手超时（毫秒）：面板打开且服务就绪后，此时间内无任何 bridgeAck 视为握手失败 */
-const HANDSHAKE_TIMEOUT_MS = 3000;
+/**
+ * 握手超时（毫秒）：面板打开且服务就绪后，此时间内无任何 bridgeAck 视为握手失败。
+ * 设 10s：DSH web 首次冷启动（加载全部插件与页面资源）可达 ~10s，若窗口过短会把
+ * 慢启动误判为握手失败（degraded）而弹错误警告。
+ */
+const HANDSHAKE_TIMEOUT_MS = 10000;
 /** 激活后评估桥接状态的延迟（毫秒）：略大于握手超时，给握手回执留出时间 */
-const BRIDGE_EVAL_DELAY_MS = 3500;
+const BRIDGE_EVAL_DELAY_MS = 11000;
 
 /** DshConfig → ManagerOptions（探测 3s、轮询 0.5s，与规格一致） */
 function toManagerOptions(config: DshConfig): ManagerOptions {
