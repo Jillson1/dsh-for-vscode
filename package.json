@@ -1,9 +1,9 @@
 {
-  "name": "dsh-vscode-panel",
-  "displayName": "DSH",
-  "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面",
-  "version": "0.2.4",
-  "publisher": "Fengze233",
+  "name": "dsh-for-vscode",
+  "displayName": "DSH for VS Code (Jillson)",
+  "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位）",
+  "version": "0.1.0",
+  "publisher": "Jillson1",
   "icon": "assets/icon.png",
   "license": "MIT",
   "engines": {
@@ -244,10 +244,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Fengze233/dsh-vscode.git"
+    "url": "git+https://github.com/Jillson1/dsh-for-vscode.git"
   },
-  "homepage": "https://github.com/Fengze233/dsh-vscode#readme",
+  "homepage": "https://github.com/Jillson1/dsh-for-vscode#readme",
   "bugs": {
-    "url": "https://github.com/Fengze233/dsh-vscode/issues"
+    "url": "https://github.com/Jillson1/dsh-for-vscode/issues"
   }
 }

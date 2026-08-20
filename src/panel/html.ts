@@ -14,7 +14,7 @@ export type PanelMessage =
   | { type: 'copyUrl' }
   | { type: 'showLogs' }
   | { type: 'bridgeOpenExternal'; url: string }
-  | { type: 'bridgeOpenFile'; path: string; cwd?: string }
+  | { type: 'bridgeOpenFile'; path: string; cwd?: string; line?: number; oldText?: string }
   | { type: 'bridgeCopyText'; text: string; requestId: string }
   | { type: 'bridgeReadText'; requestId: string }
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
@@ -108,9 +108,16 @@ if (iframeEl) {
     if (d && d.kind === 'bridgeAck') { bridgeAcked = true; vscode.postMessage({ type: 'bridgeAck', ok: d.ok === true }); return; }
     // 打开外链：转发给扩展 → vscode.env.openExternal
     if (d && d.kind === 'openExternal' && typeof d.url === 'string') { vscode.postMessage({ type: 'bridgeOpenExternal', url: d.url }); return; }
-    // 打开文件：转发给扩展 → showTextDocument（携带可选 cwd）
+    // 打开文件：转发给扩展 → showTextDocument（携带可选 cwd / line / oldText）
+    // line 用于 read 场景的 offset 直传；oldText 用于 edit 场景，扩展读文件定位起始行。
     if (d && d.kind === 'openFile' && typeof d.path === 'string') {
-      vscode.postMessage({ type: 'bridgeOpenFile', path: d.path, cwd: typeof d.cwd === 'string' ? d.cwd : undefined });
+      vscode.postMessage({
+        type: 'bridgeOpenFile',
+        path: d.path,
+        cwd: typeof d.cwd === 'string' ? d.cwd : undefined,
+        line: typeof d.line === 'number' && Number.isFinite(d.line) ? d.line : undefined,
+        oldText: typeof d.oldText === 'string' && d.oldText !== '' ? d.oldText : undefined,
+      });
       return;
     }
     // 复制文本：转发给扩展 → vscode.env.clipboard.writeText（跨源 iframe 原生剪贴板 API 被 VS Code 拦截）

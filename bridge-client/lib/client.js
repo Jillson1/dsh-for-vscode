@@ -343,7 +343,21 @@ window.__ModuleLoader__.load({
       if (menuEl) menuEl.style.display = "none";
     }
 
-    // —— DOM 拦截：外链与 fileMention 点击 → postMessage 转发给父页面（扩展） ——
+    // —— DOM 拦截：外链 / fileMention / fileLink 点击 → postMessage 转发给父页面（扩展） ——
+    // 说明（来自 v0.2.4 实测修复）：DSH 用 CSS Modules 把 .fileMention / .fileLink 类名混淆成
+    // [hash]_fileMention / [hash]_fileLink，因此不能依赖 classList.contains 精确类名：
+    // - fileMention 用稳定特征识别：button[type="button"] 且同时带 title + aria-label；
+    // - fileLink（工具卡片路径按钮）用混淆类名后缀 fileLink 匹配。
+    // 工具卡片（dsh-file-jump 插件）会为 fileLink 补 data-abs-path（cwd 解析后的绝对路径）
+    // 与 data-old-text（edit 场景的改前片段）；这里优先读 data 属性，缺省回退文本。
+    function buildOpenFileFromButton(btn) {
+      const abs = btn.getAttribute("data-abs-path");
+      const oldTextRaw = btn.getAttribute("data-old-text");
+      const oldText = oldTextRaw !== null && oldTextRaw !== "" ? oldTextRaw : undefined;
+      // 绝对路径优先；无则回退文本（相对路径，扩展侧按工作区根解析兜底）
+      const label = abs && abs !== "" ? abs : (btn.getAttribute("aria-label") || btn.getAttribute("title") || btn.textContent || "");
+      return buildOpenFileMessage(label, undefined, oldText);
+    }
     function bindLinkInterception() {
       document.addEventListener("click", (e) => {
         if (bridgeToken === "") return; // 未握手（普通浏览器打开）不激活
@@ -357,15 +371,20 @@ window.__ModuleLoader__.load({
           parent.postMessage(buildOpenExternalMessage(anchor.href), "*");
           return;
         }
-        // 文件路径按钮：DSH fileMention 渲染为 button.fileMention，label 取 aria-label/title/textContent
-        const btn = target.closest("button[title], button[aria-label]");
-        if (btn && btn.classList && btn.classList.contains("fileMention")) {
+        // 文件路径按钮（fileMention）：button[type="button"] 且同时带 title + aria-label
+        const btn = target.closest("button[type='button'][title][aria-label]");
+        if (btn) {
           e.preventDefault();
           e.stopPropagation();
-          const label = btn.getAttribute("aria-label") || btn.getAttribute("title") || btn.textContent || "";
-          // openFile 消息仍发送 path；不带 cwd 字段（工作区同步已移除，会话 cwd 不再维护），
-          // 扩展侧以工作区根目录作为相对路径解析兜底。
-          parent.postMessage(buildOpenFileMessage(label), "*");
+          parent.postMessage(buildOpenFileFromButton(btn), "*");
+          return;
+        }
+        // 工具卡片上的文件路径（fileLink）：button[type="button"] 且混淆类名含 fileLink 后缀
+        const fileLinkBtn = target.closest("button[type='button'][class*='fileLink']");
+        if (fileLinkBtn) {
+          e.preventDefault();
+          e.stopPropagation();
+          parent.postMessage(buildOpenFileFromButton(fileLinkBtn), "*");
         }
       }, true); // 捕获阶段：先于 DSH 自身处理器
     }

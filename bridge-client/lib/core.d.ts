@@ -7,8 +7,12 @@ export function isAllowedExternalUrl(url: string): boolean;
 /** 构造"打开外链"消息 */
 export function buildOpenExternalMessage(url: string): { kind: 'openExternal'; url: string };
 
-/** 构造"打开文件"消息（cwd 为会话工作目录，可选） */
-export function buildOpenFileMessage(path: string, cwd: string | undefined): { kind: 'openFile'; path: string; cwd?: string };
+/** 构造"打开文件"消息（cwd 为会话工作目录，oldText 为 edit 场景改前片段；均可选，缺省省略字段） */
+export function buildOpenFileMessage(
+  path: string,
+  cwd: string | undefined,
+  oldText?: string,
+): { kind: 'openFile'; path: string; cwd?: string; oldText?: string };
 
 /** 构造"工作区同步回执"消息（bridgeAck，path 可选） */
 export function buildSyncWorkspaceAck(ok: boolean, path?: string): { kind: 'bridgeAck'; ok: boolean; path?: string };

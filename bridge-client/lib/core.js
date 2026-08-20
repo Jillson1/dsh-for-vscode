@@ -20,9 +20,12 @@ export function buildOpenExternalMessage(url) {
   return { kind: 'openExternal', url };
 }
 
-// 构造"打开文件"消息（cwd 为会话工作目录，可选；无 cwd 时省略该字段）
-export function buildOpenFileMessage(path, cwd) {
-  return cwd === undefined ? { kind: 'openFile', path } : { kind: 'openFile', path, cwd };
+// 构造"打开文件"消息（cwd 为会话工作目录，oldText 为 edit 场景的改前片段；均可选，缺省省略字段）
+export function buildOpenFileMessage(path, cwd, oldText) {
+  const msg = { kind: 'openFile', path };
+  if (cwd !== undefined) msg.cwd = cwd;
+  if (oldText !== undefined && typeof oldText === 'string' && oldText !== '') msg.oldText = oldText;
+  return msg;
 }
 
 // 构造"工作区同步回执"消息（bridgeAck，path 可选）

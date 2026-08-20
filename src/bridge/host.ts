@@ -12,6 +12,10 @@ export interface BridgeMessageDeps {
   openExternal(url: string): Thenable<boolean>;
   /** 打开文本文档（生产接 vscode.window.showTextDocument） */
   openTextDocument(path: string): Thenable<void>;
+  /** 读取文件文本（edit 场景定位 oldText 用；生产接 node:fs readFileSync/async） */
+  readFileText(path: string): Promise<string>;
+  /** 打开文档后定位到 1-based 行并高亮（生产接 showTextDocument + revealRange） */
+  revealLine(path: string, line: number): Thenable<void>;
   /** 弹用户可见提示（生产接 vscode.window.showWarningMessage，测试注入假实现以断言） */
   showWarning(msg: string): void;
   /** 工作区根目录（相对路径解析的兜底基准，生产由扩展入口注入） */
@@ -49,7 +53,24 @@ export function resolveBridgePath(raw: string, sessionCwd: string | undefined, w
 }
 
 /**
+ * 在文件内容中定位改前片段（oldText）的起始行号（1-based）。
+ * 返回 `undefined` 表示无法定位：oldText 为空、内容不含该片段（文件可能已被后续修改）。
+ * 取第一次出现位置，符合 edit 单次匹配语义；replace_all 场景定位第一处。
+ * @param content 文件当前全文
+ * @param oldText 改前片段（edit 的 old_string）
+ * @returns 1-based 起始行号，或 undefined
+ */
+export function computeLineByText(content: string, oldText: string): number | undefined {
+  if (typeof content !== 'string' || typeof oldText !== 'string' || oldText === '') return undefined;
+  const idx = content.indexOf(oldText);
+  if (idx === -1) return undefined;
+  return content.slice(0, idx).split('\n').length;
+}
+
+/**
  * 处理桥接消息：外链打开走协议白名单，文件跳转走路径解析。
+ * 文件跳转的定位优先级：消息自带 line（read 场景已带 offset）→ 消息自带 oldText
+ * （edit 场景由 DSH 插件注入改前片段，这里读文件 indexOf 定位起始行）。
  */
 export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessageDeps): Promise<void> {
   if (msg.type === 'bridgeOpenExternal') {
@@ -70,6 +91,27 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
       try {
         // 打开文档可能因文件不存在/无权限等失败，捕获后给用户可见反馈而非未处理拒绝
         await deps.openTextDocument(r.path);
+        // 定位目标行：优先消息自带 line（read 场景的 offset 直传），
+        // 缺省但有 oldText（edit 场景的改前片段）时读文件 indexOf 计算。
+        let targetLine = typeof msg.line === 'number' && Number.isFinite(msg.line) && msg.line >= 1
+          ? msg.line
+          : undefined;
+        if (targetLine === undefined && typeof msg.oldText === 'string' && msg.oldText !== '') {
+          try {
+            const content = await deps.readFileText(r.path);
+            targetLine = computeLineByText(content, msg.oldText);
+          } catch {
+            targetLine = undefined; // 读文件失败（权限/IO）：只打开文件，不跳行
+          }
+        }
+        if (targetLine !== undefined) {
+          try {
+            await deps.revealLine(r.path, targetLine);
+          } catch (err) {
+            // 跳行失败（行号越界等）不影响文件已打开，仅提示定位失败
+            deps.showWarning(`无法定位到第 ${targetLine} 行：${r.path}（${errSummary(err)}）`);
+          }
+        }
       } catch (err) {
         // 文案内联固定提示（本模块纯逻辑，直接断言，与 Task 7 的 i18n 无关）
         deps.showWarning(`无法打开文件：${r.path}（${errSummary(err)}）`);

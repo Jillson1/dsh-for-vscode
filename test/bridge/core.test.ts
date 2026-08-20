@@ -34,6 +34,16 @@ test('buildOpenFileMessage 携带可选 cwd', () => {
   assert.deepEqual(buildOpenFileMessage('/abs/a.ts', undefined), { kind: 'openFile', path: '/abs/a.ts' });
 });
 
+test('buildOpenFileMessage 携带可选 oldText（仅非空字符串）', () => {
+  // 合法 oldText → 消息带 oldText 字段（edit 场景跳行依据）
+  assert.deepEqual(buildOpenFileMessage('/abs/a.ts', undefined, 'const x = 1'), { kind: 'openFile', path: '/abs/a.ts', oldText: 'const x = 1' });
+  // cwd 与 oldText 并存
+  assert.deepEqual(buildOpenFileMessage('a.ts', '/proj', 'old'), { kind: 'openFile', path: 'a.ts', cwd: '/proj', oldText: 'old' });
+  // 空字符串 / undefined → 省略 oldText 字段，消息形状不变
+  assert.deepEqual(buildOpenFileMessage('/abs/a.ts', undefined, ''), { kind: 'openFile', path: '/abs/a.ts' });
+  assert.deepEqual(buildOpenFileMessage('/abs/a.ts', undefined), { kind: 'openFile', path: '/abs/a.ts' });
+});
+
 test('buildSyncWorkspaceAck 构造回执', () => {
   assert.deepEqual(buildSyncWorkspaceAck(true), { kind: 'bridgeAck', ok: true });
   assert.deepEqual(buildSyncWorkspaceAck(false, '/proj'), { kind: 'bridgeAck', ok: false, path: '/proj' });

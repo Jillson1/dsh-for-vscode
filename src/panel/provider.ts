@@ -100,6 +100,22 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
           openTextDocument: async (p) => {
             await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
           },
+          // edit 场景定位 oldText：扩展宿主读文件（有完整 Node 权限），indexOf 算起始行
+          readFileText: async (p) => {
+            const { promises: fs } = await import('node:fs');
+            return fs.readFile(p, 'utf8');
+          },
+          // edit 场景精确跳行：打开后 revealRange 定位到 1-based 修改起始行并高亮居中
+          revealLine: async (p, line) => {
+            const editor = await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
+            const doc = editor.document;
+            const start = new vscode.Position(line - 1, 0);
+            // 行号越界由 validateRange 归一：文档末尾行数不足时定位到最后一行
+            const end = doc.lineAt(Math.min(line - 1, doc.lineCount - 1)).range.end;
+            const range = doc.validateRange(new vscode.Range(start, end));
+            editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+            editor.selection = new vscode.Selection(range.start, range.end);
+          },
           // 用户提示统一走 vscode.window.showWarningMessage（host 层不 import vscode，保持纯逻辑可单测）
           showWarning: (m) => void vscode.window.showWarningMessage(m),
           workspaceRoot: this.workspaceRoot(), // 工作区根目录：openFile 相对路径解析的兜底基准
