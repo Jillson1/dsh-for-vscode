@@ -349,13 +349,18 @@ window.__ModuleLoader__.load({
     // - fileMention 用稳定特征识别：button[type="button"] 且同时带 title + aria-label；
     // - fileLink（工具卡片路径按钮）用混淆类名后缀 fileLink 匹配。
     // 工具卡片（dsh-file-jump 插件）会为 fileLink 补 data-abs-path（cwd 解析后的绝对路径）
-    // 与 data-old-text（edit 场景的改前片段）；这里优先读 data 属性，缺省回退文本。
+    // 与 data-old-text（edit 场景的改前片段）。
+    // 消息正文的 fileMention 按钮：title 为完整路径（title: path），aria-label 是本地化
+    // 打开文案（"打开 {path}"，带前缀）——因此必须优先 title 而非 aria-label，否则会把
+    // "打开 E:\..." 当相对路径拼到工作区根。
     function buildOpenFileFromButton(btn) {
       const abs = btn.getAttribute("data-abs-path");
       const oldTextRaw = btn.getAttribute("data-old-text");
       const oldText = oldTextRaw !== null && oldTextRaw !== "" ? oldTextRaw : undefined;
-      // 绝对路径优先；无则回退文本（相对路径，扩展侧按工作区根解析兜底）
-      const label = abs && abs !== "" ? abs : (btn.getAttribute("aria-label") || btn.getAttribute("title") || btn.textContent || "");
+      // 路径优先级：data-abs-path（工具卡片绝对路径）> title（fileMention 完整路径）>
+      // aria-label / 文本（回退；扩展侧按工作区根解析）。
+      const title = btn.getAttribute("title");
+      const label = abs && abs !== "" ? abs : (title && title !== "" ? title : (btn.getAttribute("aria-label") || btn.textContent || ""));
       return buildOpenFileMessage(label, undefined, oldText);
     }
     function bindLinkInterception() {
