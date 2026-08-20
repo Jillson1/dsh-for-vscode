@@ -118,11 +118,11 @@ test('handleBridgeMessage openFile 跳行失败时提示用户', async () => {
 });
 
 test('handleBridgeMessage openFile 打开失败时提示用户', async () => {
-  // 假 openTextDocument 抛错 → 应调用 showWarning，文案含解析后的路径与错误摘要，且不抛未处理异常
+  // 假 openTextDocument 抛错（非"文件不存在"类）→ 应调用 showWarning，文案含解析后的路径与错误摘要
   const warnings: string[] = [];
   await handleBridgeMessage({ type: 'bridgeOpenFile', path: 'missing.ts', cwd: '/proj' }, {
     openExternal: async () => true,
-    openTextDocument: async () => { throw new Error('ENOENT: no such file'); },
+    openTextDocument: async () => { throw new Error('EACCES: permission denied'); },
     readFileText: async () => '',
     revealLine: async () => {},
     showWarning: (m) => { warnings.push(m); },
@@ -130,7 +130,39 @@ test('handleBridgeMessage openFile 打开失败时提示用户', async () => {
   });
   assert.equal(warnings.length, 1);
   assert.ok(warnings[0].includes('/proj/missing.ts'), `提示应含路径，实际：${warnings[0]}`);
-  assert.ok(warnings[0].includes('ENOENT'), `提示应含错误摘要，实际：${warnings[0]}`);
+  assert.ok(warnings[0].includes('EACCES'), `提示应含错误摘要，实际：${warnings[0]}`);
+});
+
+test('handleBridgeMessage openFile 文件不存在时提示"未创建/未落盘"而非路径错误', async () => {
+  // write 新建场景文件可能未落盘：错误指向文件不存在 → 应提示"文件不存在（可能尚未创建或未落盘）"
+  const warnings: string[] = [];
+  await handleBridgeMessage({ type: 'bridgeOpenFile', path: 'new-script.cjs', cwd: '/proj' }, {
+    openExternal: async () => true,
+    openTextDocument: async () => { throw new Error('Unable to resolve nonexistent file \'e:\\proj\\new-script.cjs\''); },
+    readFileText: async () => '',
+    revealLine: async () => {},
+    showWarning: (m) => { warnings.push(m); },
+    workspaceRoot: '/proj',
+  });
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes('文件不存在'), `应提示文件不存在，实际：${warnings[0]}`);
+  assert.ok(warnings[0].includes('可能尚未创建或未落盘'), `应提示未落盘原因，实际：${warnings[0]}`);
+});
+
+test('handleBridgeMessage openFile 非"文件不存在"错误仍提示原始摘要', async () => {
+  // 权限等非缺失错误 → 保留"无法打开文件 + 错误摘要"文案
+  const warnings: string[] = [];
+  await handleBridgeMessage({ type: 'bridgeOpenFile', path: 'locked.ts', cwd: '/proj' }, {
+    openExternal: async () => true,
+    openTextDocument: async () => { throw new Error('EACCES: permission denied'); },
+    readFileText: async () => '',
+    revealLine: async () => {},
+    showWarning: (m) => { warnings.push(m); },
+    workspaceRoot: '/proj',
+  });
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes('无法打开文件'), `应保留打开失败文案，实际：${warnings[0]}`);
+  assert.ok(warnings[0].includes('EACCES'), `应含错误摘要，实际：${warnings[0]}`);
 });
 
 test('handleBridgeMessage openFile 路径无法解析时提示用户', async () => {

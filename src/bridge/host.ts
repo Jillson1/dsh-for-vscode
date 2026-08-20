@@ -33,6 +33,12 @@ function errSummary(err: unknown): string {
   return String(err);
 }
 
+/** 错误是否表示"文件在磁盘上不存在"（write 未落盘 / 路径失效等）。 */
+function isFileMissingError(err: unknown): boolean {
+  const msg = errSummary(err);
+  return /ENOENT|no such file|Unable to resolve nonexistent/i.test(msg);
+}
+
 /**
  * 解析文件路径：绝对路径直接采用；相对路径依次按 会话 cwd → 工作区根 作为基准解析。
  * 安全规则：形似 URL 的协议串（如 https://、javascript:）一律拒绝，
@@ -114,7 +120,12 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
         }
       } catch (err) {
         // 文案内联固定提示（本模块纯逻辑，直接断言，与 Task 7 的 i18n 无关）
-        deps.showWarning(`无法打开文件：${r.path}（${errSummary(err)}）`);
+        // write 新建场景文件可能尚未落盘（被拒/失败），错误若指向"文件不存在"
+        // 则给针对性的提示，避免误导为路径解析问题。
+        const summary = errSummary(err);
+        deps.showWarning(isFileMissingError(err)
+          ? `文件不存在（可能尚未创建或未落盘）：${r.path}`
+          : `无法打开文件：${r.path}（${summary}）`);
       }
     } else {
       // 路径无法解析（危险协议或缺少基准目录）：仅弹提示，不打断面板与桥接流程
