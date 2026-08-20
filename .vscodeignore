@@ -1,0 +1,18 @@
+.vscode/**
+.superpowers/**
+.github/**
+src/**
+test/**
+scripts/**
+# 排除开发文档，但保留 docs/screenshots：README 引用的截图/视频封面需随包分发（商店页面渲染 README 图片）
+docs/superpowers/**
+docs/**/*.md
+out/test/**
+# 桥接客户端源码为模板（client.js 含占位符），打包只发构建产物 out/bridge-client/
+bridge-client/**
+**/*.map
+tsconfig.json
+# 仓库元数据与中文镜像：不随扩展分发（GitHub 上可读）
+.gitignore
+README.zh.md
+CONTRIBUTING.md
