@@ -1,7 +1,7 @@
 {
   "name": "dsh-for-vscode",
-  "displayName": "DSH for VS Code (Jillson)",
-  "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位）",
+  "displayName": "DSH for VS Code",
+  "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位），右键文件/选区即可添加到 DSH 输入框",
   "version": "0.1.0",
   "publisher": "Jillson1",
   "icon": "assets/icon.png",
@@ -25,7 +25,9 @@
     "onCommand:dsh.showLogs",
     "onCommand:dsh.bridge.retry",
     "onCommand:dsh.bridge.uninstall",
-    "onCommand:dsh.copyLogs"
+    "onCommand:dsh.copyLogs",
+    "onCommand:dsh.addFileToDsh",
+    "onCommand:dsh.addSelectionToDsh"
   ],
   "contributes": {
     "viewsContainers": {
@@ -128,9 +130,33 @@
       {
         "command": "dsh.bridge.uninstall",
         "title": "%dsh.cmd.bridgeUninstall.title%"
+      },
+      {
+        "command": "dsh.addFileToDsh",
+        "title": "%dsh.cmd.addFileToDsh.title%",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.addSelectionToDsh",
+        "title": "%dsh.cmd.addSelectionToDsh.title%",
+        "category": "DSH"
       }
     ],
     "menus": {
+      "explorer/context": [
+        {
+          "command": "dsh.addFileToDsh",
+          "group": "DSH@1",
+          "when": "resourceScheme == file"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dsh.addSelectionToDsh",
+          "group": "DSH@1",
+          "when": "editorTextFocus && resourceScheme == file"
+        }
+      ],
       "view/title": [
         {
           "command": "dsh.openExternal",

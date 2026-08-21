@@ -451,6 +451,12 @@ window.__ModuleLoader__.load({
         }
         return;
       }
+      // 父页面下行注入 composer（右键 "Add to DSH"）：转发给同 iframe 的 dsh-file-jump 插件。
+      // 两插件是独立 bundle 无直接依赖，用 window.postMessage 解耦（* 目标同文档，无跨源风险）。
+      if (d.kind === "injectComposer" && typeof d.text === "string") {
+        window.postMessage({ kind: "dsh-file-jump:injectComposer", text: d.text }, "*");
+        return;
+      }
     }
 
     // —— 入口：立即绑定 DOM 拦截与父消息监听，等待父页面握手 ——

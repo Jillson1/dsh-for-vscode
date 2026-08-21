@@ -48,6 +48,9 @@ const messages = {
     'bridge.neverAgain': "Don't Show Again",
     'bridge.uninstalled': 'DSH bridge uninstalled. Restart the DSH service for the change to take effect.',
     'bridge.uninstallFailed': 'Failed to uninstall DSH bridge: {message}',
+    // Add to DSH
+    'addToDsh.notReady': 'DSH panel is not open. Open the DSH panel first, then try again.',
+    'addToDsh.injected': 'Added to DSH input box.',
   },
   zh: {
     'panel.loading': '正在启动 DSH 服务…',
@@ -88,6 +91,9 @@ const messages = {
     'bridge.neverAgain': '不再提示',
     'bridge.uninstalled': 'DSH 桥接已卸载，重启 DSH 服务后生效。',
     'bridge.uninstallFailed': '卸载 DSH 桥接失败：{message}',
+    // Add to DSH
+    'addToDsh.notReady': 'DSH 面板未打开。请先打开 DSH 面板再重试。',
+    'addToDsh.injected': '已添加到 DSH 输入框。',
   },
 } as const;
 

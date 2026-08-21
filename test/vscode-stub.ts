@@ -9,4 +9,10 @@ export const workspace = {
   }),
 };
 
-export default { workspace };
+/** 最小 window 桩：Add to DSH 命令会用 showWarning/InformationMessage 提示用户 */
+export const window = {
+  showWarningMessage: () => undefined,
+  showInformationMessage: () => undefined,
+};
+
+export default { workspace, window };

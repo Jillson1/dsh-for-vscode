@@ -58,6 +58,17 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
     void this.manager.ensureRunning();
   }
 
+  /**
+   * 把文件引用文本注入 DSH 页面 composer（下行，供 "Add to DSH" 命令使用）。
+   * 仅当面板可见且 webview 就绪时投递；返回 false 表示当前不可注入
+   * （面板未打开/隐藏），调用方据此提示用户。
+   */
+  injectComposer(text: string): boolean {
+    if (!this.view || this.view.visible !== true) return false;
+    void this.view.webview.postMessage({ type: 'bridgeInjectComposer', text });
+    return true;
+  }
+
   /** 处理面板内按钮消息（全部转交给 manager 或对应命令） */
   private onMessage(msg: PanelMessage): void {
     switch (msg.type) {

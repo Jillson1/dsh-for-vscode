@@ -18,6 +18,7 @@ export type PanelMessage =
   | { type: 'bridgeCopyText'; text: string; requestId: string }
   | { type: 'bridgeReadText'; requestId: string }
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
+  | { type: 'bridgeInjectComposer'; text: string }
   | { type: 'bridgeAck'; ok: boolean };
 
 /** 渲染上下文 */
@@ -100,6 +101,12 @@ if (iframeEl) {
         ok: d.ok,
         text: typeof d.text === 'string' ? d.text : undefined,
       }, iframeSrc);
+      return;
+    }
+    // 下行：扩展把文件引用注入 DSH composer（右键 "Add to DSH"）→ 转发给 iframe
+    // 由 bridge client 再转给 dsh-file-jump 插件写输入框草稿。
+    if (d && d.type === 'bridgeInjectComposer' && typeof d.text === 'string') {
+      iframeEl.contentWindow.postMessage({ kind: 'injectComposer', text: d.text }, iframeSrc);
       return;
     }
     // —— 上行：iframe 发来的消息，origin + source 双重校验 ——

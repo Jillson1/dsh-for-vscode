@@ -11,6 +11,7 @@ import { ServiceManager, type ManagerOptions } from './service/manager';
 import { DshPanelProvider } from './panel/provider';
 import { StatusBarController } from './statusbar';
 import { resolveWorkspaceRoot } from './workspaceRoot';
+import { addFileToDsh, addSelectionToDsh, type AddToDshTargets } from './addToDsh';
 import {
   installBridge,
   uninstallBridge,
@@ -358,6 +359,18 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('dsh.copyLogs', () => copyLogs()),
     vscode.commands.registerCommand('dsh.bridge.retry', () => void retryBridge()),
     vscode.commands.registerCommand('dsh.bridge.uninstall', () => void uninstallBridgeCmd()),
+    // —— Add to DSH：右键文件/选区 → 注入文件引用到 DSH 输入框 ——
+    // explorer/context 会把 resource 作为 uri 参数传入；无 uri 时回退活动编辑器文档。
+    vscode.commands.registerCommand('dsh.addFileToDsh', (uri?: vscode.Uri) => {
+      const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+      if (!target) return;
+      const targets: AddToDshTargets = { providers: [panelPrimary, panelSecondary] };
+      void addFileToDsh(target, targets);
+    }),
+    vscode.commands.registerCommand('dsh.addSelectionToDsh', () => {
+      const targets: AddToDshTargets = { providers: [panelPrimary, panelSecondary] };
+      void addSelectionToDsh(targets);
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('dsh')) onConfigChanged();
     }),
