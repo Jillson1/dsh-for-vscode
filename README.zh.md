@@ -1,8 +1,7 @@
 # DSH for VS Code 🐳
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/Fengze233.dsh-vscode-panel?label=Marketplace&color=4D6BFE)](https://marketplace.visualstudio.com/items?itemName=Fengze233.dsh-vscode-panel)
-[![GitHub stars](https://img.shields.io/github/stars/Fengze233/dsh-vscode?style=social)](https://github.com/Fengze233/dsh-vscode)
+[![GitHub stars](https://img.shields.io/github/stars/Jillson1/dsh-for-vscode?style=social)](https://github.com/Jillson1/dsh-for-vscode)
 [![DSH 社区插件](https://img.shields.io/badge/DSH%20Plugin-dsh--plugin-4D6BFE)](https://github.com/topics/dsh-plugin)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.91-blue)](https://code.visualstudio.com/)
 
@@ -13,6 +12,8 @@
 ## 📸 界面截图
 
 ![DSH for VS Code 界面截图](docs/screenshots/overview.png)
+
+![DSH for VS Code 演示](docs/screenshots/overview.gif)
 
 ## 🎬 演示视频
 
@@ -29,35 +30,27 @@
 - 🔄 **状态实时同步**：状态栏四态指示（运行中绿 / 启动中黄 / 失败红 / 已停止灰），点击状态栏可开关面板；
 - 🛟 **异常兜底**：端口被占、`dsh` 未安装、启动超时、服务崩溃/失联均有对应提示页与一键重连，绝不白屏；配置端口被其他程序占用时自动改用第一个空闲端口（仅本次会话临时生效）；
 - 🌐 **双语界面**：文案跟随 VS Code 显示语言——中文环境显示中文，其余语言一律英文；
+- 📂 **文件跳转**：点击面板内的文件路径在 VS Code 中打开，`edit` 卡片精确定位修改起始行、`read` 卡片定位读取起始行；
+- ➕ **添加到 DSH**：在文件树或编辑区右键文件/选区 → "添加到 DSH"，把文件引用（`@路径` 或 `@路径:起始-结束`）写入 DSH 输入框作为草稿，审阅后手动发送；
 - 📋 **复制/粘贴/右键开箱即用**：修复 VS Code 内嵌环境下（尤其是 macOS）聊天内容无法 `Cmd+C` 复制、`Cmd+V` 粘贴、右键无菜单的问题——面板内置标准编辑快捷键仿真与右键菜单（复制/粘贴/剪切/全选/撤销/重做），普通浏览器打开与原有功能完全不受影响；
 - 🧹 **退出清理**：关闭窗口自动停止插件自启的服务，不留僵尸进程；手动启动的服务永不干预；
 - 🔒 **安全边界**：只连接回环地址（127.0.0.1 / localhost / [::1]），不读取凭据。
 
 ## 📥 安装
 
-**方式一：商店安装（推荐）**
+**方式一：下载 .vsix 安装包（推荐）**
 
-VS Code 扩展面板搜索 `DSH`（发布者 Fengze233），或命令行执行：
-
-```bash
-code --install-extension Fengze233.dsh-vscode-panel
-```
-
-商店页面：<https://marketplace.visualstudio.com/items?itemName=Fengze233.dsh-vscode-panel>
-
-**方式二：下载 .vsix 安装包**
-
-1. 前往 [Releases](https://github.com/Fengze233/dsh-vscode/releases) 下载最新 `dsh-vscode.vsix`；
+1. 前往 [Releases](https://github.com/Jillson1/dsh-for-vscode/releases) 下载最新 `dsh-vscode.vsix`；
 2. VS Code 中按 `Ctrl+Shift+P` → 执行 `Extensions: Install from VSIX...` → 选择下载的文件；
 3. 重载窗口（`Developer: Reload Window`）。
 
-**方式三：从源码构建**
+**方式二：从源码构建**
 
 ```bash
-git clone https://github.com/Fengze233/dsh-vscode.git
-cd dsh-vscode
+git clone https://github.com/Jillson1/dsh-for-vscode.git
+cd dsh-for-vscode
 npm install
-npm run package        # 产出 dsh-vscode.vsix，再按方式二安装
+npm run package        # 产出 dsh-vscode.vsix，再按方式一安装
 ```
 
 **前置要求**：已安装 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 `dsh` 命令并位于 PATH 中（插件会自动检测；未安装时会给出提示）。
@@ -85,6 +78,8 @@ npm run package        # 产出 dsh-vscode.vsix，再按方式二安装
 | `DSH: 复制日志` | 把完整日志（环境信息 + 服务日志）复制到剪贴板，用于问题报告 |
 | `DSH: 重试桥接安装` | 重新安装桥接并重启服务 |
 | `DSH: 卸载桥接` | 移除桥接包并还原 `cordis.patch.yml` |
+| `DSH: 添加到 DSH` | 把所选文件路径写入 DSH 输入框（`@路径`） |
+| `DSH: 将选区添加到 DSH` | 把所选文件路径与行号范围写入 DSH 输入框（`@路径:起始-结束`） |
 
 ## 🔗 桥接与联动
 
@@ -172,9 +167,9 @@ src/
 本项目是 DeepSeek Harness 社区插件（话题：[`dsh-plugin`](https://github.com/topics/dsh-plugin)）。
 
 - DSH 官方仓库：<https://github.com/deepseek-ai/deepseek-harness>
-- 问题反馈：<https://github.com/Fengze233/dsh-vscode/issues>
+- 问题反馈：<https://github.com/Jillson1/dsh-for-vscode/issues>
 - DSH 社区讨论：<https://github.com/deepseek-ai/deepseek-harness/discussions>
 
 ## 📄 License
 
-[MIT](./LICENSE) © 2026 Fengze233
+[MIT](./LICENSE) © 2026 liufuchen

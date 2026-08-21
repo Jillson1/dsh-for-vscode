@@ -1,8 +1,7 @@
 # DSH for VS Code 🐳
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/Fengze233.dsh-vscode-panel?label=Marketplace&color=4D6BFE)](https://marketplace.visualstudio.com/items?itemName=Fengze233.dsh-vscode-panel)
-[![GitHub stars](https://img.shields.io/github/stars/Fengze233/dsh-vscode?style=social)](https://github.com/Fengze233/dsh-vscode)
+[![GitHub stars](https://img.shields.io/github/stars/Jillson1/dsh-for-vscode?style=social)](https://github.com/Jillson1/dsh-for-vscode)
 [![DSH Plugin](https://img.shields.io/badge/DSH%20Plugin-dsh--plugin-4D6BFE)](https://github.com/topics/dsh-plugin)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.91-blue)](https://code.visualstudio.com/)
 
@@ -14,11 +13,7 @@ Use the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness
 
 ![DSH for VS Code screenshot](docs/screenshots/overview.png)
 
-## 🎬 Demo video
-
-[![如何在 VSCode 中使用 DeepSeek Harness？用 DSH！！（Bilibili）](docs/screenshots/video-cover.jpg)](https://www.bilibili.com/video/BV1p8bD6dE18)
-
-*59-second demo on Bilibili (Chinese): [BV1p8bD6dE18](https://www.bilibili.com/video/BV1p8bD6dE18)*
+![DSH for VS Code demo](docs/screenshots/overview.gif)
 
 ---
 
@@ -29,35 +24,27 @@ Use the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness
 - 🔄 **Live status sync**: four-state status bar indicator (running green / starting yellow / failed red / stopped gray); click it to toggle the panel;
 - 🛟 **Error fallbacks**: port occupied, `dsh` missing, start timeout, crash/disconnect — each has a dedicated page with one-click reconnect; if the configured port is taken by another program, the extension temporarily falls back to the first free port for that session, never a blank screen;
 - 🌐 **Bilingual UI**: copy follows the VS Code display language — Chinese for `zh-*`, English otherwise;
+- 📂 **File jumps**: clicking a file path in the panel opens the file in VS Code, with the changed line located precisely for `edit` cards and the read start line for `read` cards;
+- ➕ **Add to DSH**: right-click a file in the Explorer or a selection in the editor → "Add to DSH" writes the file reference (`@path` or `@path:start-end`) into the DSH input box as a draft, ready for you to review and send;
 - 📋 **Copy/Paste/Context menu, works out of the box**: fixes the macOS webview quirk where `Cmd+C` / `Cmd+V` and the right-click menu silently fail inside the embedded DSH page — the panel ships its own standard edit shortcut simulation and a context menu (Copy/Paste/Cut/Select All/Undo/Redo), while plain-browser usage and every existing feature stay untouched;
 - 🧹 **Clean exit**: closing the window stops the auto-started service, no zombie processes; manually started services are never touched;
 - 🔒 **Security boundary**: loopback addresses only (127.0.0.1 / localhost / [::1]); no credentials are read.
 
 ## 📥 Installation
 
-**Option 1: Marketplace (recommended)**
+**Option 1: .vsix package (recommended)**
 
-Search for `DSH` (publisher Fengze233) in the VS Code Extensions view, or run:
-
-```bash
-code --install-extension Fengze233.dsh-vscode-panel
-```
-
-Marketplace page: <https://marketplace.visualstudio.com/items?itemName=Fengze233.dsh-vscode-panel>
-
-**Option 2: .vsix package**
-
-1. Download the latest `dsh-vscode.vsix` from [Releases](https://github.com/Fengze233/dsh-vscode/releases);
+1. Download the latest `dsh-vscode.vsix` from [Releases](https://github.com/Jillson1/dsh-for-vscode/releases);
 2. In VS Code press `Ctrl+Shift+P` → run `Extensions: Install from VSIX...` → select the file;
 3. Reload the window (`Developer: Reload Window`).
 
-**Option 3: Build from source**
+**Option 2: Build from source**
 
 ```bash
-git clone https://github.com/Fengze233/dsh-vscode.git
-cd dsh-vscode
+git clone https://github.com/Jillson1/dsh-for-vscode.git
+cd dsh-for-vscode
 npm install
-npm run package        # produces dsh-vscode.vsix, then install as in Option 2
+npm run package        # produces dsh-vscode.vsix, then install as in Option 1
 ```
 
 **Prerequisite**: the `dsh` CLI from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) must be installed and on your PATH (the extension detects it and shows a hint if missing).
@@ -85,6 +72,8 @@ npm run package        # produces dsh-vscode.vsix, then install as in Option 2
 | `DSH: Copy Logs` | Copy the full DSH log (environment info + service log) to the clipboard for bug reports |
 | `DSH: Retry Bridge Install` | Reinstall the bridge and restart the service |
 | `DSH: Uninstall Bridge` | Remove the bridge package and restore `cordis.patch.yml` |
+| `DSH: Add to DSH` | Write the selected file path into the DSH input box (`@path`) |
+| `DSH: Add Selection to DSH` | Write the selected file path with line range into the DSH input box (`@path:start-end`) |
 
 ## 🔗 Bridge integration
 
@@ -172,9 +161,9 @@ src/
 This is a DeepSeek Harness community plugin (topic: [`dsh-plugin`](https://github.com/topics/dsh-plugin)).
 
 - DSH official repo: <https://github.com/deepseek-ai/deepseek-harness>
-- Issue tracker: <https://github.com/Fengze233/dsh-vscode/issues>
+- Issue tracker: <https://github.com/Jillson1/dsh-for-vscode/issues>
 - DSH community discussions: <https://github.com/deepseek-ai/deepseek-harness/discussions>
 
 ## 📄 License
 
-[MIT](./LICENSE) © 2026 Fengze233
+[MIT](./LICENSE) © 2026 liufuchen
