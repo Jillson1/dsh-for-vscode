@@ -353,6 +353,24 @@ window.__ModuleLoader__.load({
     // 消息正文的 fileMention 按钮：title 为完整路径（title: path），aria-label 是本地化
     // 打开文案（"打开 {path}"，带前缀）——因此必须优先 title 而非 aria-label，否则会把
     // "打开 E:\..." 当相对路径拼到工作区根。
+    // 判定字符串是否像"文件路径"：含盘符 / 路径分隔符 / 反斜杠 / 常见扩展名之一。
+    // 用于排除 DSH 模型切换按钮等 title 为显示名（非路径）的元素，避免误拦截。
+    function looksLikeFilePath(s) {
+      if (typeof s !== "string" || s.trim() === "") return false;
+      const t = s.trim();
+      // Windows 盘符（C:\ 或 C:/）绝对路径
+      if (/^[a-zA-Z]:[\\/]/.test(t)) return true;
+      // POSIX 根路径（/xxx）
+      if (/^\/[^/]/.test(t)) return true;
+      // 含反斜杠：Windows 相对路径（如 a\b\c.ts）
+      if (t.includes("\\")) return true;
+      // 含正斜杠：仅当路径段带扩展名/点（src/a.vue、dir/.hidden）才算路径，
+      // 排除 provider/model 这类模型 ID（如 deepseek/deepseek-v4-flash-0731）
+      if (t.includes("/")) return /\/[^/]*\.[^/]+$/.test(t);
+      // 常见文件扩展名结尾
+      if (/\.(tsx?|jsx?|mjs|cjs|vue|json|md|txt|css|less|scss|html|yml|yaml|toml|py|cpp|c|h|hpp|java|go|rs|sh|bat|ps1|png|jpg|jpeg|gif|webp|svg|ico|xml|sql|ini|cfg|env|lock|log|bak)$/i.test(t)) return true;
+      return false;
+    }
     function buildOpenFileFromButton(btn) {
       const abs = btn.getAttribute("data-abs-path");
       const oldTextRaw = btn.getAttribute("data-old-text");
@@ -376,9 +394,13 @@ window.__ModuleLoader__.load({
           parent.postMessage(buildOpenExternalMessage(anchor.href), "*");
           return;
         }
-        // 文件路径按钮（fileMention）：button[type="button"] 且同时带 title + aria-label
+        // 文件路径按钮（fileMention）：button[type="button"] 且同时带 title + aria-label。
+        // 注意：DSH 的模型切换按钮（composer model seat）同样是
+        // button[type="button"][title][aria-label]，但其 title/aria-label 是模型显示名
+        // （如 "deepseek-v4-flash-0731 (Vision Toolkit) · Default"），不含路径特征，
+        // 必须放行交给 DSH 处理，否则会被误当成文件路径去打开 → 报"文件不存在"。
         const btn = target.closest("button[type='button'][title][aria-label]");
-        if (btn) {
+        if (btn && looksLikeFilePath(btn.getAttribute("title") || btn.getAttribute("aria-label") || "")) {
           e.preventDefault();
           e.stopPropagation();
           parent.postMessage(buildOpenFileFromButton(btn), "*");
