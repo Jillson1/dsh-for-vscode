@@ -5,7 +5,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveBridgePath, computeLineByText, handleBridgeMessage } from '../../src/bridge/host';
-
 test('resolveBridgePath 处理绝对/相对/危险协议', () => {
   // 绝对路径直接采用（忽略 cwd 与工作区根）
   assert.deepEqual(resolveBridgePath('/a/b.ts', undefined, '/proj'), { kind: 'abs', path: '/a/b.ts' });
@@ -230,4 +229,96 @@ test('handleBridgeMessage openFile 带 oldText 但读文件失败时只打开不
     showWarning: () => {},
   });
   assert.equal(revealed, 0);
+});
+
+test('handleBridgeMessage diffApplied 转发给 recordDiff', async () => {
+  // A 组：edit/write 落盘后广播 applied diff → 调用 recordDiff（含解析后的路径与 hunks）
+  const recorded: unknown[] = [];
+  await handleBridgeMessage({
+    type: 'bridgeDiffApplied',
+    path: 'src/a.ts',
+    cwd: '/proj',
+    diffs: [{ oldText: 'const x = 1', newText: 'const x = 2' }],
+    callId: 'c-1',
+  }, {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    recordDiff: async (d) => { recorded.push(d); },
+    showWarning: () => {},
+    workspaceRoot: '/proj',
+  });
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0], {
+    path: 'src/a.ts',
+    cwd: '/proj',
+    diffs: [{ oldText: 'const x = 1', newText: 'const x = 2' }],
+    callId: 'c-1',
+  });
+});
+
+test('handleBridgeMessage diffApplied 过滤畸形 hunk', async () => {
+  // oldText 为空 / newText 缺失的 hunk 应被过滤：全部畸形 → 不调用 recordDiff
+  let recorded = 0;
+  await handleBridgeMessage({
+    type: 'bridgeDiffApplied',
+    path: 'src/a.ts',
+    cwd: '/proj',
+    diffs: [
+      { oldText: '', newText: 'x' },
+      { oldText: 'y', newText: '' },
+      null as unknown as { oldText: string; newText: string },
+    ],
+    callId: 'c-2',
+  }, {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    recordDiff: async () => { recorded += 1; },
+    showWarning: () => {},
+    workspaceRoot: '/proj',
+  });
+  assert.equal(recorded, 0);
+});
+
+test('handleBridgeMessage diffApplied 空 diffs 时不调用 recordDiff', async () => {
+  let recorded = 0;
+  await handleBridgeMessage({
+    type: 'bridgeDiffApplied',
+    path: 'src/a.ts',
+    cwd: '/proj',
+    diffs: [],
+    callId: 'c-3',
+  }, {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    recordDiff: async () => { recorded += 1; },
+    showWarning: () => {},
+  });
+  assert.equal(recorded, 0);
+});
+
+test('handleBridgeMessage diffApplied recordDiff 抛错时提示用户', async () => {
+  // 读文件 IO 失败等：提示"无法记录修改"，不抛未处理异常
+  const warnings: string[] = [];
+  await handleBridgeMessage({
+    type: 'bridgeDiffApplied',
+    path: '/proj/a.ts',
+    diffs: [{ oldText: 'x', newText: 'y' }],
+    callId: 'c-4',
+  }, {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    recordDiff: async () => { throw new Error('EIO'); },
+    showWarning: (m) => { warnings.push(m); },
+  });
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes('/proj/a.ts'), `提示应含路径，实际：${warnings[0]}`);
+  assert.ok(warnings[0].includes('EIO'), `提示应含错误摘要，实际：${warnings[0]}`);
 });

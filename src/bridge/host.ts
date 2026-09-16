@@ -16,6 +16,13 @@ export interface BridgeMessageDeps {
   readFileText(path: string): Promise<string>;
   /** 打开文档后定位到 1-based 行并高亮（生产接 showTextDocument + revealRange） */
   revealLine(path: string, line: number): Thenable<void>;
+  /**
+   * 记录一条 applied diff（A 组：edit/write 落盘后的修改可视化）。
+   * 生产接 DiffTracker.record：读文件定位修改行 → 编辑区高亮 + 记入撤销栈。
+   * 纯逻辑只负责路径解析与记录构造，实际 vscode 动作由注入方完成。
+   * 可选：未注入（旧测试/降级路径）时静默忽略 diff 消息。
+   */
+  recordDiff?(diff: { path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string }): void | Promise<void>;
   /** 弹用户可见提示（生产接 vscode.window.showWarningMessage，测试注入假实现以断言） */
   showWarning(msg: string): void;
   /** 工作区根目录（相对路径解析的兜底基准，生产由扩展入口注入） */
@@ -92,8 +99,7 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
     return;
   }
   if (msg.type === 'bridgeOpenFile') {
-    const r = resolveBridgePath(msg.path, msg.cwd, deps.workspaceRoot);
-    if (r.kind === 'abs') {
+    const r = resolveBridgePath(msg.path, msg.cwd, deps.workspaceRoot);    if (r.kind === 'abs') {
       try {
         // 打开文档可能因文件不存在/无权限等失败，捕获后给用户可见反馈而非未处理拒绝
         await deps.openTextDocument(r.path);
@@ -130,6 +136,23 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
     } else {
       // 路径无法解析（危险协议或缺少基准目录）：仅弹提示，不打断面板与桥接流程
       deps.showWarning(`无法解析路径：${msg.path}`);
+    }
+    return;
+  }
+  if (msg.type === 'bridgeDiffApplied') {
+    // A 组：edit/write 落盘后的 applied diff → 交给注入方记录（高亮 + 撤销栈）。
+    // diffs 已由桥接侧过滤（只含 oldText/newText 均为非空字符串的 hunk）；
+    // 此处再做一次防御性过滤，避免畸形负载进入记录层。
+    const diffs = Array.isArray(msg.diffs)
+      ? msg.diffs.filter((d) => d && typeof d.oldText === 'string' && d.oldText !== '' && typeof d.newText === 'string' && d.newText !== '')
+      : [];
+    if (diffs.length === 0) return; // 无可用 hunk（write 新建等）：无可高亮/撤销，静默忽略
+    if (deps.recordDiff === undefined) return; // 未注入记录器（旧调用方）：静默忽略
+    try {
+      await deps.recordDiff({ path: msg.path, cwd: msg.cwd, diffs, callId: msg.callId });
+    } catch (err) {
+      // 记录失败（读文件 IO 等）不影响主流程：仅提示，不打断
+      deps.showWarning(`无法记录修改：${msg.path}（${errSummary(err)}）`);
     }
     return;
   }

@@ -147,3 +147,20 @@ export function buildReadTextAck(requestId, ok, text) {
     ? { kind: 'readTextAck', requestId, ok: true, text }
     : { kind: 'readTextAck', requestId, ok: false };
 }
+
+// 构造"diff 已应用"转发消息（iframe 内插件 → 父页面 → 扩展）
+// A 组：dsh-file-jump 插件在 edit/write 落盘后广播 applied diff，桥接转发给扩展宿主，
+// 由扩展在编辑区高亮修改行并记入撤销栈。payload 来自插件 CustomEvent 的 detail。
+export function buildDiffAppliedMessage(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (typeof payload.path !== 'string' || payload.path === '') return null;
+  const diffs = Array.isArray(payload.diffs)
+    ? payload.diffs
+        .filter((d) => d && typeof d.oldText === 'string' && typeof d.newText === 'string')
+        .map((d) => ({ oldText: d.oldText, newText: d.newText }))
+    : [];
+  if (diffs.length === 0) return null;
+  const msg = { kind: 'diffApplied', path: payload.path, diffs, callId: String(payload.callId ?? '') };
+  if (typeof payload.cwd === 'string' && payload.cwd !== '') msg.cwd = payload.cwd;
+  return msg;
+}

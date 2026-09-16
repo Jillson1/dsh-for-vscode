@@ -481,8 +481,20 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // —— A 组 diff 转发：dsh-file-jump 插件广播的 applied diff → 父页面 → 扩展 ——
+    // 插件与桥接是独立 bundle：插件 dispatch window CustomEvent（命名空间 dsh-file-jump:diffApplied），
+    // 桥接在此监听并转发给父页面（扩展宿主高亮修改行 / 记入撤销栈）。未握手不转发。
+    function installDiffRelay() {
+      window.addEventListener("dsh-file-jump:diffApplied", (e) => {
+        if (bridgeToken === "") return; // 未握手（普通浏览器）不转发
+        const msg = buildDiffAppliedMessage(e.detail);
+        if (msg) parent.postMessage(msg, "*");
+      });
+    }
+
     // —— 入口：立即绑定 DOM 拦截与父消息监听，等待父页面握手 ——
     bindLinkInterception();
+    installDiffRelay();
     window.addEventListener("message", onParentMessage);
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("contextmenu", onContextMenu, true);

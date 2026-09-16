@@ -19,9 +19,12 @@ import {
   type BridgeInstallResult,
 } from './bridge/installer';
 import { evaluateBridgeStatus, bridgeWarningText } from './bridge/status';
+import { DiffService } from './bridge/diff-service';
 
 let manager: ServiceManager | null = null;
 let output: vscode.OutputChannel | null = null;
+/** A 组修改服务（activate 内装配；命令 handler 经模块级引用） */
+let diffService: DiffService | null = null;
 
 /** 日志缓冲（供「复制日志」命令 dsh.copyLogs 使用；上限行数防内存膨胀） */
 const logBuffer: string[] = [];
@@ -314,6 +317,28 @@ export function activate(context: vscode.ExtensionContext): void {
   // 桥接启用 getter：随时读取最新配置，供 readyPage 决定是否注入握手脚本
   const bridgeEnabledGetter = (): boolean => readConfig().config.bridgeEnabled;
 
+  // —— A 组：修改可视化服务（单例，两个面板共享；高亮/撤销/diff 视图/hover）——
+  diffService = new DiffService({
+    window: vscode.window,
+    workspace: vscode.workspace,
+    languages: vscode.languages,
+    commands: vscode.commands,
+    Uri: vscode.Uri,
+    Position: vscode.Position,
+    Range: vscode.Range,
+    WorkspaceEdit: vscode.WorkspaceEdit,
+    MarkdownString: vscode.MarkdownString,
+    Hover: vscode.Hover,
+    readFileText: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      return fs.readFile(p, 'utf8');
+    },
+    log: (m) => appendLog(`[diff] ${m}`),
+    workspaceRoot: workspaceRootGetter(),
+  });
+  // 局部非空引用（模块级 diffService 供命令 handler 使用；activate 内用 ds 避免 null 收窄）
+  const ds = diffService;
+
   // 左右两侧各一个 provider 实例，共享同一 manager（服务状态一致）
   const panelPrimary = new DshPanelProvider(
     manager,
@@ -324,6 +349,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onBridgeAck, // onBridgeAck：桥接握手回执 → handshakeOk（Task 7 状态评估）
     workspaceRootGetter, // workspaceRoot：文件相对路径解析的兜底基准
     bridgeEnabledGetter, // bridgeEnabled：dsh.bridge.enabled 驱动握手脚本注入
+    diffService, // A 组：修改服务（recordDiff / bridgeDiffApplied 共用）
   );
   const panelSecondary = new DshPanelProvider(
     manager,
@@ -331,6 +357,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onBridgeAck,
     workspaceRootGetter,
     bridgeEnabledGetter,
+    diffService,
   );
   new StatusBarController(manager);
 
@@ -374,7 +401,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('dsh')) onConfigChanged();
     }),
-    { dispose: () => manager?.dispose() },
+    // —— A 组：修改可视化命令 + 生命周期 ——
+    vscode.commands.registerCommand('dsh.diff.show', () => void showDiffForActive()),
+    vscode.commands.registerCommand('dsh.diff.revert', () => void revertActiveDiff()),
+    vscode.commands.registerCommand('dsh.diff.revertAll', () => void revertAllDiffs()),
+    // 编辑器切换时刷新高亮（文件打开/聚焦时把已记录修改标出来）
+    vscode.window.onDidChangeActiveTextEditor((ed) => {
+      if (ed && ds) ds.refreshFile(ed.document.uri.fsPath);
+    }),
+    ds.registerContentProvider(),
+    ds.registerHoverProvider(),
+    { dispose: () => { ds.dispose(); manager?.dispose(); } },
   );
 
   // 激活后延迟评估一次桥接状态：degraded 且未静默时弹警告
@@ -384,6 +421,49 @@ export function activate(context: vscode.ExtensionContext): void {
 /** 打开面板：聚焦视图（VS Code 自动打开视图所在的侧边栏，左/右皆可） */
 async function openPanel(): Promise<void> {
   await vscode.commands.executeCommand('dsh.panel.focus');
+}
+
+// —— A 组命令 handler ——
+
+/** 在 diff 编辑器里查看当前文件的 DSH 修改对比。 */
+async function showDiffForActive(): Promise<void> {
+  const s = diffService;
+  const ed = vscode.window.activeTextEditor;
+  if (!s || !ed) return;
+  await s.showDiff(ed.document.uri.fsPath);
+}
+
+/** 撤销当前文件最近一条 DSH 修改（后改先撤）。 */
+async function revertActiveDiff(): Promise<void> {
+  const s = diffService;
+  const ed = vscode.window.activeTextEditor;
+  if (!s || !ed) return;
+  const callId = s.lastCallId(ed.document.uri.fsPath);
+  if (callId === undefined) {
+    void vscode.window.showInformationMessage('当前文件没有 DSH 修改记录');
+    return;
+  }
+  const r = await s.revert(callId);
+  if (r.ok) {
+    void vscode.window.showInformationMessage('已撤销该处 DSH 修改');
+  } else if (r.reason === 'anchor-missing') {
+    void vscode.window.showWarningMessage('文件已被改动，该处修改无法撤销');
+  } else {
+    void vscode.window.showWarningMessage('撤销失败');
+  }
+}
+
+/** 撤销当前文件的全部 DSH 修改。 */
+async function revertAllDiffs(): Promise<void> {
+  const s = diffService;
+  const ed = vscode.window.activeTextEditor;
+  if (!s || !ed) return;
+  const n = await s.revertAll(ed.document.uri.fsPath);
+  if (n > 0) {
+    void vscode.window.showInformationMessage(`已撤销 ${n} 处 DSH 修改`);
+  } else {
+    void vscode.window.showInformationMessage('没有可撤销的 DSH 修改');
+  }
 }
 
 /** 在外部浏览器打开 DSH 页面 */

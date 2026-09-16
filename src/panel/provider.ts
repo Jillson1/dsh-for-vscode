@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { randomUUID } from 'node:crypto';
 import { ServiceManager } from '../service/manager';
 import { handleBridgeMessage } from '../bridge/host';
+import { DiffService } from '../bridge/diff-service';
 import { t } from '../i18n';
 import {
   loadingPage,
@@ -37,6 +38,8 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
     private onBridgeAck?: (ok: boolean) => void,
     private workspaceRoot: () => string | undefined = () => undefined,
     private bridgeEnabled: () => boolean = () => true,
+    /** A 组修改服务（高亮/撤销/diff 视图；两个面板共享同一单例） */
+    private diffService?: DiffService,
   ) {
     // 订阅状态变化，重绘面板（iframe 与占位页由状态驱动，无白屏路径）
     manager.onChange(() => this.render());
@@ -127,10 +130,18 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
             editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
             editor.selection = new vscode.Selection(range.start, range.end);
           },
+          // A 组：applied diff → 修改服务记录（高亮 + 撤销栈）
+          recordDiff: async (d) => {
+            await this.diffService?.record(d);
+          },
           // 用户提示统一走 vscode.window.showWarningMessage（host 层不 import vscode，保持纯逻辑可单测）
           showWarning: (m) => void vscode.window.showWarningMessage(m),
           workspaceRoot: this.workspaceRoot(), // 工作区根目录：openFile 相对路径解析的兜底基准
         });
+        break;
+      case 'bridgeDiffApplied':
+        // A 组：DSH 插件广播的 applied diff → 修改服务记录（高亮 + 撤销栈）
+        void this.diffService?.record(msg);
         break;
       case 'bridgeAck':
         // 握手回执：通知注入的回调（Task 7 据此评估桥接状态）

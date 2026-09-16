@@ -15,6 +15,7 @@ export type PanelMessage =
   | { type: 'showLogs' }
   | { type: 'bridgeOpenExternal'; url: string }
   | { type: 'bridgeOpenFile'; path: string; cwd?: string; line?: number; oldText?: string }
+  | { type: 'bridgeDiffApplied'; path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string }
   | { type: 'bridgeCopyText'; text: string; requestId: string }
   | { type: 'bridgeReadText'; requestId: string }
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
@@ -124,6 +125,22 @@ if (iframeEl) {
         cwd: typeof d.cwd === 'string' ? d.cwd : undefined,
         line: typeof d.line === 'number' && Number.isFinite(d.line) ? d.line : undefined,
         oldText: typeof d.oldText === 'string' && d.oldText !== '' ? d.oldText : undefined,
+      });
+      return;
+    }
+    // diff 已应用（A 组）：转发给扩展 → 编辑区高亮修改行 + 记入撤销栈。
+    // payload 来自 dsh-file-jump 插件广播、桥接转发的 applied hunks。
+    if (d && d.kind === 'diffApplied' && typeof d.path === 'string') {
+      vscode.postMessage({
+        type: 'bridgeDiffApplied',
+        path: d.path,
+        cwd: typeof d.cwd === 'string' ? d.cwd : undefined,
+        diffs: Array.isArray(d.diffs)
+          ? d.diffs.filter(
+              (h) => h && typeof h.oldText === 'string' && typeof h.newText === 'string',
+            )
+          : [],
+        callId: typeof d.callId === 'string' ? d.callId : '',
       });
       return;
     }

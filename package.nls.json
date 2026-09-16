@@ -26,5 +26,8 @@
   "dsh.walkthrough.step.description": "Click the DSH icon in the Activity Bar or the Secondary Side Bar, or run [DSH: Open Panel](command:dsh.openPanel). The panel starts (or reuses) the dsh web service and embeds the DSH page in the sidebar.",
   "dsh.cmd.copyLogs.title": "DSH: Copy Logs",
   "dsh.cmd.addFileToDsh.title": "Add to DSH",
-  "dsh.cmd.addSelectionToDsh.title": "Add Selection to DSH"
+  "dsh.cmd.addSelectionToDsh.title": "Add Selection to DSH",
+  "dsh.cmd.diffShow.title": "DSH: Show Diff",
+  "dsh.cmd.diffRevert.title": "DSH: Revert Last Modification",
+  "dsh.cmd.diffRevertAll.title": "DSH: Revert All Modifications"
 }

@@ -140,6 +140,21 @@
         "command": "dsh.addSelectionToDsh",
         "title": "%dsh.cmd.addSelectionToDsh.title%",
         "category": "DSH"
+      },
+      {
+        "command": "dsh.diff.show",
+        "title": "%dsh.cmd.diffShow.title%",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.diff.revert",
+        "title": "%dsh.cmd.diffRevert.title%",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.diff.revertAll",
+        "title": "%dsh.cmd.diffRevertAll.title%",
+        "category": "DSH"
       }
     ],
     "menus": {
