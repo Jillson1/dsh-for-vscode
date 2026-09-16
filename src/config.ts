@@ -20,6 +20,10 @@ export interface RawDshConfig {
   executablePath?: string;
   /** 轮次完成时是否弹通知（dsh.notify.onTurnComplete） */
   notifyOnTurnComplete?: boolean;
+  /** 选区变化时是否挂 Comments 内联线程（dsh.selection.threads.enabled） */
+  selectionThreadsEnabled?: boolean;
+  /** Quick Edit 发送前是否先确认（dsh.quickEdit.confirmBeforeSend） */
+  quickEditConfirmBeforeSend?: boolean;
 }
 
 /** 规范化后的配置（均有合法默认值） */
@@ -39,6 +43,10 @@ export interface DshConfig {
   executablePath: string;
   /** 轮次完成时是否弹通知 */
   notifyOnTurnComplete: boolean;
+  /** 选区变化时是否挂 Comments 内联线程 */
+  selectionThreadsEnabled: boolean;
+  /** Quick Edit 发送前是否先确认 */
+  quickEditConfirmBeforeSend: boolean;
 }
 
 /** 默认配置 */
@@ -53,6 +61,9 @@ export const DEFAULTS: DshConfig = {
   silenceWarning: false,
   executablePath: '',
   notifyOnTurnComplete: true,
+  // F10/F11 默认值：线程默认开（可在设置里关掉，避免"选一点就冒东西"）；发送前确认默认开
+  selectionThreadsEnabled: true,
+  quickEditConfirmBeforeSend: true,
 };
 
 /** 安全边界：仅允许回环地址 */
@@ -122,11 +133,17 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
   // F7 通知设置：仅接受布尔值，否则回退默认（默认开通知、关声音——过度弹窗是明确反对项）
   const notifyOnTurnComplete =
     typeof raw.notifyOnTurnComplete === 'boolean' ? raw.notifyOnTurnComplete : DEFAULTS.notifyOnTurnComplete;
+  const selectionThreadsEnabled =
+    typeof raw.selectionThreadsEnabled === 'boolean' ? raw.selectionThreadsEnabled : DEFAULTS.selectionThreadsEnabled;
+  const quickEditConfirmBeforeSend =
+    typeof raw.quickEditConfirmBeforeSend === 'boolean'
+      ? raw.quickEditConfirmBeforeSend
+      : DEFAULTS.quickEditConfirmBeforeSend;
 
   return {
     config: {
       host, port, autoStart, stopOnExit, extraArgs, bridgeEnabled, workspaceRootIndex,
-      silenceWarning, executablePath, notifyOnTurnComplete,
+      silenceWarning, executablePath, notifyOnTurnComplete, selectionThreadsEnabled, quickEditConfirmBeforeSend,
     },
     errors,
   };
@@ -146,5 +163,7 @@ export function readConfig(): { config: DshConfig; errors: string[] } {
     silenceWarning: ws.get<boolean>('bridge.silenceWarning'),
     executablePath: ws.get<string>('executablePath'),
     notifyOnTurnComplete: ws.get<boolean>('notify.onTurnComplete'),
+    selectionThreadsEnabled: ws.get<boolean>('selection.threads.enabled'),
+    quickEditConfirmBeforeSend: ws.get<boolean>('quickEdit.confirmBeforeSend'),
   });
 }

@@ -49,5 +49,11 @@
   "dsh.welcome.checkpoints": "No checkpoints for this workspace.\n\nCheckpoints come from the DSH change ledger (turn-rewind plugin) and only exist for regular git worktrees; they appear after a DSH turn starts.",
   "dsh.cmd.checkpointsRefresh.title": "Refresh Checkpoints",
   "dsh.cmd.checkpointDiff.title": "Diff Against This Turn",
-  "dsh.cmd.checkpointRestore.title": "Restore Code To Before This Turn"
+  "dsh.cmd.checkpointRestore.title": "Restore Code To Before This Turn",
+  "dsh.config.selectionThreads": "Show a DSH comment thread under a text selection (Add to DSH / Quick Edit). Turn off if it feels noisy.",
+  "dsh.config.quickEditConfirm": "Ask for confirmation before Quick Edit sends an instruction (it spends a real model turn).",
+  "dsh.cmd.quickEditSelection.title": "DSH: Quick Edit Selection (Alt+K)",
+  "dsh.cmd.selectionQuickEdit.title": "Quick Edit This Selection",
+  "dsh.cmd.selectionAddToDsh.title": "Add Selection to DSH",
+  "dsh.cmd.selectionSubmitReply.title": "Send to DSH"
 }

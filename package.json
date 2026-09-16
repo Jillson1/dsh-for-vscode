@@ -48,7 +48,11 @@
     "onCommand:dsh.diff.keepAll",
     "onCommand:dsh.checkpoints.refresh",
     "onCommand:dsh.checkpoint.diff",
-    "onCommand:dsh.checkpoint.restore"
+    "onCommand:dsh.checkpoint.restore",
+    "onCommand:dsh.quickEdit.selection",
+    "onCommand:dsh.selection.quickEdit",
+    "onCommand:dsh.selection.addToDsh",
+    "onCommand:dsh.selection.submitReply"
   ],
   "contributes": {
     "viewsContainers": {
@@ -275,9 +279,38 @@
         "title": "%dsh.cmd.checkpointRestore.title%",
         "icon": "$(history)",
         "category": "DSH"
+      },
+      {
+        "command": "dsh.quickEdit.selection",
+        "title": "%dsh.cmd.quickEditSelection.title%",
+        "icon": "$(sparkle)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.selection.quickEdit",
+        "title": "%dsh.cmd.selectionQuickEdit.title%",
+        "icon": "$(sparkle)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.selection.addToDsh",
+        "title": "%dsh.cmd.selectionAddToDsh.title%",
+        "icon": "$(add)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.selection.submitReply",
+        "title": "%dsh.cmd.selectionSubmitReply.title%",
+        "icon": "$(send)",
+        "category": "DSH"
       }
     ],
     "keybindings": [
+    {
+      "command": "dsh.quickEdit.selection",
+      "key": "alt+k",
+      "when": "editorTextFocus && editorHasSelection"
+    },
     {
       "command": "dsh.change.next",
       "key": "f8",
@@ -308,6 +341,30 @@
           "command": "dsh.addSelectionToDsh",
           "group": "DSH@1",
           "when": "editorTextFocus && resourceScheme == file"
+        },
+        {
+          "command": "dsh.quickEdit.selection",
+          "group": "DSH@2",
+          "when": "editorTextFocus && editorHasSelection && resourceScheme == file"
+        }
+      ],
+      "comments/commentThread/title": [
+        {
+          "command": "dsh.selection.addToDsh",
+          "when": "commentThread == dsh.selection",
+          "group": "inline@1"
+        },
+        {
+          "command": "dsh.selection.quickEdit",
+          "when": "commentThread == dsh.selection",
+          "group": "inline@2"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "dsh.selection.submitReply",
+          "when": "commentThread == dsh.selection",
+          "group": "inline"
         }
       ],
       "view/item/context": [
@@ -458,6 +515,16 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "%dsh.config.notifyOnTurnComplete%"
+        },
+        "dsh.selection.threads.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.selectionThreads%"
+        },
+        "dsh.quickEdit.confirmBeforeSend": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.quickEditConfirm%"
         }
       }
     }

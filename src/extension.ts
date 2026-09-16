@@ -49,6 +49,13 @@ import {
   showCheckpointDiff,
 } from './checkpoints/checkpoint-content';
 import type { CheckpointsReadyMsg } from './panel/html';
+import {
+  SELECTION_CONTROLLER_ID,
+  SELECTION_THREAD_CONTEXT,
+  SelectionThreadController,
+} from './selection/selection-thread';
+import { sendQuickEdit } from './selection/quick-edit';
+import type { SelectionInfo } from './selection/selection-model';
 import { revealLineInEditor } from './editorReveal';
 
 let manager: ServiceManager | null = null;
@@ -852,6 +859,103 @@ ${sample}${more}`,
     checkpointsTree.refresh();
   }
 
+  // —— F10/F11：选区工具条（Comments 内联线程）+ Quick Edit ——
+  // VS Code 没有"选区悬浮工具条"API（探索文档 §8.5 实测：inline chat 不可接管），
+  // Comments 线程是能做到的最接近形态：锚定选区 + 标题按钮 + 可回复的输入框。
+  const selectionController = vscode.comments.createCommentController(SELECTION_CONTROLLER_ID, 'DSH');
+
+  /** 当前选区信息（命令与线程回复共用同一口径） */
+  function currentSelection(): SelectionInfo | null {
+    const ed = vscode.window.activeTextEditor;
+    return ed === undefined ? null : selectionThreads.infoOf(ed);
+  }
+
+  /** F11：把指令发给 DSH 当前会话（确认策略与失败提示都在 quick-edit.ts 里） */
+  async function runQuickEdit(info: SelectionInfo, instruction: string): Promise<void> {
+    const result = await sendQuickEdit(info, instruction, {
+      confirmBeforeSend: () => readConfig().config.quickEditConfirmBeforeSend,
+      confirm: async (text) => {
+        const SEND = '发送';
+        const NEVER = '发送并不再询问';
+        const choice = await vscode.window.showWarningMessage(text, { modal: true }, SEND, NEVER);
+        if (choice === NEVER) {
+          // "不再询问"写回设置：用户明确表达了偏好，就不该每轮再问
+          await vscode.workspace
+            .getConfiguration('dsh')
+            .update('quickEdit.confirmBeforeSend', false, vscode.ConfigurationTarget.Global);
+          return true;
+        }
+        return choice === SEND;
+      },
+      send: (message) => panelPrimary.postToPage(message) || panelSecondary.postToPage(message),
+      notify: (m) => void vscode.window.showInformationMessage(m),
+      log: (m) => appendLog(`[quickEdit] ${m}`),
+    });
+    if (result === 'sent') selectionThreads.clear();
+  }
+
+  /** 选区线程控制器（防抖 / 复用 / 单线程清理都在类里） */
+  const selectionThreads = new SelectionThreadController({
+    activeEditor: () => vscode.window.activeTextEditor,
+    uri: (path) => vscode.Uri.file(path),
+    range: (startLine0, endLine0) => new vscode.Range(startLine0, 0, endLine0, 0),
+    markdown: (text) => {
+      const md = new vscode.MarkdownString(text)
+      md.supportThemeIcons = true
+      return md;
+    },
+    createThread: (uri, range, body) => {
+      const thread = selectionController.createCommentThread(uri, range, [
+        { body, author: { name: 'DSH' }, mode: vscode.CommentMode.Preview },
+      ]);
+      thread.canReply = true; // 回复框就是"编辑器内的 Quick Edit 输入框"
+      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+      thread.contextValue = SELECTION_THREAD_CONTEXT; // 供 comments/commentThread/title 的 when 匹配
+      thread.label = 'DSH';
+      return thread;
+    },
+    disposeThread: (thread) => (thread as vscode.CommentThread).dispose(),
+    enabled: () => readConfig().config.selectionThreadsEnabled,
+    log: (m) => appendLog(`[selection] ${m}`),
+  });
+
+  // 线程回复 = Quick Edit 指令。
+  // 注意（实测纠正探索文档的一条结论）：Comments API **没有** `onDidSubmitCommentReply` 事件——
+  // `vscode.CommentReply` 是 `comments/commentThread/context` 菜单命令的**实参**，
+  // 也就是"线程输入框旁的那个动作按钮"点下去时把 { thread, text } 交给我们的命令。
+  // 因此回复走命令（`dsh.selection.submitReply`），而"回车即发"由 Alt+K 的 InputBox 提供。
+  function onSubmitReply(reply: vscode.CommentReply): void {
+    const info = currentSelection();
+    const text = typeof reply.text === 'string' ? reply.text : '';
+    appendLog(`[quickEdit] 线程回复提交（${text.length} 字符）`);
+    if (info === null) {
+      void vscode.window.showInformationMessage('选区已失效，请重新选中要修改的代码');
+      return;
+    }
+    void runQuickEdit(info, text);
+  }
+
+  // 选区变化：挂线程（防抖）；编辑器切换：清线程（避免线程挂在不相关的文件上）
+  const selectionSubscription = vscode.window.onDidChangeTextEditorSelection(() =>
+    selectionThreads.onSelectionChanged(),
+  );
+
+  /** Alt+K / 命令面板：Ask 一次指令再发送（不依赖线程是否可见） */
+  async function quickEditFromInput(): Promise<void> {
+    const info = currentSelection();
+    if (info === null) {
+      void vscode.window.showInformationMessage('请先选中要修改的代码');
+      return;
+    }
+    const instruction = await vscode.window.showInputBox({
+      title: `Quick Edit · ${info.pathRef}`,
+      placeHolder: '对这段代码做什么修改？（回车发送）',
+      ignoreFocusOut: true,
+    });
+    if (instruction === undefined) return;
+    await runQuickEdit(info, instruction);
+  }
+
   const panelPrimary = new DshPanelProvider(
     manager,
     () => {
@@ -970,6 +1074,19 @@ ${sample}${more}`,
     // F5：CodeLens provider 与其生命周期
     vscode.languages.registerCodeLensProvider({ scheme: 'file' }, changeLenses),
     changeLenses,
+    // —— F10/F11：选区工具条与 Quick Edit ——
+    selectionSubscription,
+    selectionController,
+    selectionThreads,
+    vscode.commands.registerCommand('dsh.quickEdit.selection', () => void quickEditFromInput()),
+    vscode.commands.registerCommand('dsh.selection.quickEdit', () => void quickEditFromInput()),
+    // 与既有 dsh.addSelectionToDsh 同一个实现（Comments 线程标题按钮用它）
+    vscode.commands.registerCommand('dsh.selection.addToDsh', () =>
+      void addSelectionToDsh({ providers: [panelPrimary, panelSecondary] }),
+    ),
+    vscode.commands.registerCommand('dsh.selection.submitReply', (reply?: vscode.CommentReply) =>
+      reply === undefined ? undefined : onSubmitReply(reply),
+    ),
     // —— F9 检查点：视图 / 内容提供者 / 命令 ——
     checkpointsView,
     checkpointsTree,

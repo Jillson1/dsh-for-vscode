@@ -13,6 +13,9 @@ test('合法配置原样通过', () => {
     bridgeEnabled: true, workspaceRootIndex: 0, silenceWarning: false, executablePath: '',
     // F7：通知默认开（仅在本轮确有变更时才弹，见 agent-state.ts）
     notifyOnTurnComplete: true,
+    // F10/F11：选区线程默认开、Quick Edit 发送前默认确认
+    selectionThreadsEnabled: true,
+    quickEditConfirmBeforeSend: true,
   });
 });
 

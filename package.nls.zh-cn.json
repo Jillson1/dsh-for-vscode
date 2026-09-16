@@ -49,5 +49,11 @@
   "dsh.welcome.checkpoints": "当前工作区没有检查点。\n\n检查点由 DSH 的 change-ledger（turn-rewind 插件）写入，且只支持常规 git 工作区；DSH 跑过一轮后这里就会出现。",
   "dsh.cmd.checkpointsRefresh.title": "刷新检查点",
   "dsh.cmd.checkpointDiff.title": "对比该轮之前",
-  "dsh.cmd.checkpointRestore.title": "恢复到该轮之前（只回滚代码）"
+  "dsh.cmd.checkpointRestore.title": "恢复到该轮之前（只回滚代码）",
+  "dsh.config.selectionThreads": "选中文本时在选区下方显示 DSH 线程（Add to DSH / Quick Edit）。嫌吵可以关掉。",
+  "dsh.config.quickEditConfirm": "Quick Edit 发送指令前先确认（会真实消耗一轮模型调用）。",
+  "dsh.cmd.quickEditSelection.title": "DSH: 用指令改这段代码（Alt+K）",
+  "dsh.cmd.selectionQuickEdit.title": "Quick Edit 这段代码",
+  "dsh.cmd.selectionAddToDsh.title": "把选区加入 DSH",
+  "dsh.cmd.selectionSubmitReply.title": "发送到 DSH"
 }
