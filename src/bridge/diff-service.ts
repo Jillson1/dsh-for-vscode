@@ -15,6 +15,7 @@ import {
   redGreenLines,
   mergeLineMarks,
   decorationTargetLine,
+  snapMarksToContent,
   diffNature,
   summarizeDiff,
   deletedLines,
@@ -405,21 +406,40 @@ export class DiffService {
     this.disposeHints(handle);
     const content = editor.document.getText();
     let drawn = 0;
+    const skipped: string[] = [];
     for (const rec of recs) {
       // 定位落到哪一行由 decorationTargetLine 统一裁决（与 hover 的命中判定同一条规则）：
       // 定位不到（newText 已被改写/被后续改动取代）→ **跳过，不回退占位行号**。
       // 回退会把整片内容误标成新增，而 hover 又查不到该记录（自相矛盾的界面）。
       const startLine = decorationTargetLine(content, rec.newText);
-      if (startLine === null) continue;
+      if (startLine === null) {
+        skipped.push(
+          `${rec.callId.slice(-6)}(tool=${rec.tool ?? '-'},old=${rec.oldText.length},new=${rec.newText.length})`,
+        );
+        continue;
+      }
       drawn += 1;
-      const marks = mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine));
+      // 删除发生在文件末尾时，投影锚点会落在结尾的空行上，而**空行的背景装饰在 VS Code 里
+      // 几乎不可见**（真机现象："这次删除完全没有高亮"）→ 吸附到 hunk 内最近的有内容行。
+      const marks = snapMarksToContent(
+        content,
+        mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine)),
+        startLine,
+      );
       for (const mark of marks) this.pushLineMark(handle, editor, mark);
-      if (marks.some((m) => m.kind !== 'add')) this.addDeletedHint(handle, editor, startLine, deletedLines(rec.oldText, rec.newText));
+      // 行尾「⇠ 原:」提示贴在与删除标记**同一行**：此前用 startLine，出现"红色在第 16 行空行、
+      // 提示却挂在第 13 行"的错位（真机现象）。
+      const delMark = marks.find((m) => m.kind !== 'add');
+      if (delMark !== undefined) {
+        this.addDeletedHint(handle, editor, delMark.line, deletedLines(rec.oldText, rec.newText));
+      }
     }
     this.applyAllDecorations(handle, editor);
     this.deps.log?.(
       `refreshFile: path=${path} 记录 ${recs.length} 条 → 高亮 ${drawn} 条` +
-        (recs.length === drawn ? '' : `（跳过 ${recs.length - drawn} 条：newText 已不在文档中，不误标）`),
+        (skipped.length === 0
+          ? ''
+          : `；跳过 ${skipped.length} 条=[${skipped.join(', ')}]（newText 已不在文档中，不误标）`),
     );
   }
 

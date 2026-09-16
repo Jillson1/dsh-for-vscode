@@ -452,6 +452,41 @@ export function decorationTargetLine(content: string, newText: string): number |
 }
 
 /**
+ * 把落在**空行**上的标记吸附到同一 hunk 内最近的有内容行（向上找）。
+ *
+ * 为什么需要（真机缺陷）：删除发生在文件末尾时，被删行在文档里没有实体，投影规则把它落到
+ * hunk 末尾——而那里往往是结尾的空白行。VS Code 对**空行的背景装饰几乎不可见**，
+ * 用户看到的现象就是"这次删除完全没有高亮"（实测：记录的 newText 是 `"\n## 标题\n\n"`，
+ * 唯一一条 del 标记落在第 16 行的空行上，而 `⇠ 原:` 提示却在第 13 行，两者还错开 3 行）。
+ *
+ * 吸附规则：
+ * - 非空行不动；
+ * - 空行则从上一行起向上找，**不越过 hunk 起始行**（`floorLine`），避免标到无关内容上；
+ * - hunk 内全为空行时保持原样（总比乱标好）。
+ *
+ * @param content  将要高亮的那个文档的内存文本
+ * @param marks    行级标记（1-based）
+ * @param floorLine 吸附下界（hunk 起始行，1-based）
+ */
+export function snapMarksToContent(
+  content: string,
+  marks: readonly HighlightLine[],
+  floorLine: number,
+): HighlightLine[] {
+  if (typeof content !== 'string' || content === '' || marks.length === 0) return [...marks];
+  const lines = content.split('\n');
+  const blank = (ln: number): boolean => (lines[ln - 1] ?? '').trim() === '';
+  const floor = Math.max(1, Math.floor(floorLine));
+  return marks.map((m) => {
+    if (!blank(m.line)) return m;
+    for (let ln = m.line - 1; ln >= floor; ln--) {
+      if (!blank(ln)) return { ...m, line: ln };
+    }
+    return m;
+  });
+}
+
+/**
  * 修改栈（内存）：按 callId 去重（同一次修改重复广播只记一条），支持按路径/全部撤销。
  * 纯数据容器，thread-safe 由调用方保证（扩展主线程单线程）。
  */

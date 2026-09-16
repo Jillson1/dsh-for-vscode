@@ -24,6 +24,7 @@ import {
   writtenContentMatches,
   userAppendedPart,
   decorationTargetLine,
+  snapMarksToContent,
   type AppliedDiffInput,
   type ModificationRecord,
 } from '../../src/bridge/diff-tracker';
@@ -425,6 +426,48 @@ test('decorationTargetLine 兼容 CRLF/LF：LF 片段在 CRLF 文档里可定位
 test('decorationTargetLine 入参非字符串 → null（防御）', () => {
   assert.equal(decorationTargetLine(undefined as unknown as string, 'x'), null);
   assert.equal(decorationTargetLine('x', undefined as unknown as string), null);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// snapMarksToContent：删除标记落在空行上 → 吸附到 hunk 内有内容的行
+// 真机缺陷：删除文件末尾的段落时，del 投影锚点落在结尾空行，而 VS Code 对空行的
+// 背景装饰几乎不可见 → 用户看到"这次删除完全没有高亮"。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('snapMarksToContent 非空行的标记原样保留', () => {
+  const marks = [{ line: 2, kind: 'del' as const }];
+  assert.deepEqual(snapMarksToContent('a\nb\nc\n', marks, 1), marks);
+});
+
+test('snapMarksToContent 空行标记向上吸附到最近的有内容行（真机用例）', () => {
+  // 真机：newText="\n## 关键判别标准\n\n" → del 锚点落在结尾空行，应吸附到标题行
+  const content = 'l1\nl2\n\n## 关键判别标准\n\n\n\n';
+  const out = snapMarksToContent(content, [{ line: 7, kind: 'del' as const }], 3);
+  assert.equal(out.length, 1);
+  assert.equal(content.split('\n')[out[0]!.line - 1], '## 关键判别标准');
+  assert.equal(out[0]!.kind, 'del');
+});
+
+test('snapMarksToContent 不越过 hunk 下界（floorLine）', () => {
+  // floor=3：第 3、4 行都是空行 → 不得吸到第 1 行（越出 hunk），保持原样
+  const out = snapMarksToContent('x\n\n\n\n', [{ line: 4, kind: 'del' as const }], 3);
+  assert.equal(out[0]!.line, 4);
+});
+
+test('snapMarksToContent hunk 内全空行 → 保持原样（不乱标）', () => {
+  const out = snapMarksToContent('x\n\n\n', [{ line: 3, kind: 'del' as const }], 2);
+  assert.equal(out[0]!.line, 3);
+});
+
+test('snapMarksToContent 空内容 / 空标记数组 → 安全返回', () => {
+  assert.deepEqual(snapMarksToContent('', [{ line: 1, kind: 'del' }], 1), [{ line: 1, kind: 'del' }]);
+  assert.deepEqual(snapMarksToContent('a\n', [], 1), []);
+});
+
+test('snapMarksToContent CRLF 文档里的空行也认得出来', () => {
+  const content = 'a\r\n\r\n标题\r\n';
+  const out = snapMarksToContent(content, [{ line: 2, kind: 'del' as const }], 1);
+  assert.equal(out[0]!.line, 1); // 第 2 行是空行 → 吸到第 1 行
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
