@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { initI18n, t } from './i18n';
 import { readConfig, type DshConfig } from './config';
 import { probeService } from './service/detect';
-import { createProcessRunner, findInPath } from './service/process';
+import { createProcessRunner, findInPath, resolveNpmGlobalNodeModules } from './service/process';
 import { ServiceManager, type ManagerOptions } from './service/manager';
 import { DshPanelProvider } from './panel/provider';
 import { StatusBarController } from './statusbar';
@@ -65,32 +65,6 @@ function toManagerOptions(config: DshConfig): ManagerOptions {
     timeoutMs: 3000,
     pollMs: 500,
   };
-}
-
-/**
- * 计算 npm 全局 node_modules 目录（Windows 且 dsh 可定位时）。
- *
- * 背景：Windows 下 VS Code 扩展宿主 spawn 的 dsh 进程对 profile 插件的 ESM 解析与普通命令行
- * 进程不同，profiles 双位置仍可能解析不到桥接包；而 npm 全局 node_modules
- * （AppData\Roaming\npm\node_modules）是确定可达的位置。本函数据此返回该目录作为第三安装目标。
- *
- * 规则（仅 win32）：
- * - 优先 config.executablePath（非空且不以 .js 结尾）→ dirname；
- * - 否则 findInPath('dsh.cmd', process.env.PATH) → dirname；
- * - 都找不到 → undefined（不传，保持双位置向后兼容）。
- * - 非 win32 → undefined。
- */
-function resolveNpmGlobalNodeModules(config: DshConfig): string | undefined {
-  if (process.platform !== 'win32') return undefined;
-  const exec = config.executablePath;
-  if (exec && !exec.endsWith('.js')) {
-    return dirname(exec);
-  }
-  const found = findInPath('dsh.cmd', process.env.PATH ?? '');
-  if (found) {
-    return dirname(found);
-  }
-  return undefined;
 }
 
 /**
@@ -171,7 +145,7 @@ export function activate(context: vscode.ExtensionContext): void {
     dshHome: process.env.DSH_HOME ?? join(homedir(), '.dsh'),
     bridgeSourceDir: join(__dirname, 'bridge-client'),
     fs: createNodeFs(),
-    npmGlobalNodeModules: resolveNpmGlobalNodeModules(config),
+    npmGlobalNodeModules: resolveNpmGlobalNodeModules(config.executablePath),
   };
 
   /**

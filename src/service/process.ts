@@ -196,6 +196,58 @@ export function resolveWindowsNodeExecutable(
   );
 }
 
+/**
+ * 解析 npm 全局 node_modules 目录（Windows 下桥接包的第 3 个安装目标）。
+ *
+ * 契约（重要）：`bridgeTargetDirs` 会把包名**直接 join** 到本函数返回值之后，因此返回值必须是
+ * **node_modules 目录**本身，而不是 npm 前缀目录。布局依据与 binJsFromShim 一致：npm 生成的 shim
+ * （`<前缀>\dsh.cmd`）把调用转发到 `<前缀>\node_modules\@deepseek-ai\dsh\lib\bin.js`。
+ *
+ * 历史缺陷（T0 实测暴露）：本函数原先返回 shim 的 dirname（即 npm **前缀**），join 后落到
+ * `<前缀>\dsh-vscode-bridge`——而 dsh 进程的 ESM 解析锚点是 `<前缀>\node_modules`，
+ * 于是这个"profile 解析不可达时的兜底目标"实际写到了**永远不会被查询**的位置（实测错位置被写入
+ * 0.4.0、正确位置长期遗留 0.3.5 旧包）。旧包无 capabilities，会让扩展的能力表门控（F6/F8/F9/F11）
+ * 静默失效，症状酷似"功能没做完"，故必须从根上修掉。
+ *
+ * 规则（仅 win32；不满足时返回 undefined = 不传该目标，保持双位置向后兼容）：
+ * - 显式 executablePath 是 bin.js（.js 结尾）→ 由包路径上溯三级得到其 node_modules；
+ * - 显式 executablePath 是 shim → 其 dirname + 'node_modules'；
+ * - 未配置 → findInPath('dsh.cmd', PATH) → 同上；
+ * - shim 已位于 node_modules 内（如 `…\node_modules\.bin\dsh.cmd`）→ 不再追加一级；
+ * - 推导结果不像 node_modules 目录时**拒绝返回**（宁可不装，也不写入错误目录——这正是原缺陷的教训）。
+ *
+ * @param executablePath 显式配置的 dsh 可执行文件路径（shim 或 bin.js；空则查 PATH）
+ * @param platform       平台名（默认 process.platform）
+ * @param envPath        PATH 字符串（默认 process.env.PATH）
+ * @param existsImpl     存在性校验（默认 node:fs.existsSync；单测注入）
+ * @returns npm 全局 node_modules 绝对路径；非 Windows / 未定位到 dsh / 推导结果可疑时返回 undefined
+ */
+export function resolveNpmGlobalNodeModules(
+  executablePath: string | undefined,
+  platform: string = process.platform,
+  envPath: string | undefined = process.env.PATH,
+  existsImpl: (p: string) => boolean = existsSync,
+): string | undefined {
+  if (platform !== 'win32') return undefined;
+  // 显式配置指向 bin.js：`<前缀>\node_modules\@deepseek-ai\dsh\lib\bin.js` 上溯三级 = node_modules
+  if (executablePath !== undefined && executablePath.endsWith('.js')) {
+    const derived = win32Path.resolve(win32Path.dirname(executablePath), '..', '..', '..');
+    return win32Path.basename(derived) === 'node_modules' ? derived : undefined;
+  }
+  const shim = executablePath !== undefined && executablePath !== ''
+    ? executablePath
+    : findInPath('dsh.cmd', envPath, existsImpl);
+  if (shim === null || shim === undefined) return undefined;
+  const dir = win32Path.dirname(shim);
+  // shim 已在 node_modules 内部（…\node_modules\.bin\dsh.cmd）：其上级才是 node_modules
+  if (win32Path.basename(dir) === '.bin') {
+    const parent = win32Path.dirname(dir);
+    return win32Path.basename(parent) === 'node_modules' ? parent : undefined;
+  }
+  if (win32Path.basename(dir) === 'node_modules') return dir;
+  return win32Path.join(dir, 'node_modules');
+}
+
 /** 进程管理接口 */
 export interface ProcessRunner {
   /** 启动 dsh web 子进程（命令名按平台选择） */

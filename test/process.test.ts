@@ -8,6 +8,7 @@ import {
   findInPath,
   binJsFromShim,
   windowsDshInvocation,
+  resolveNpmGlobalNodeModules,
   type ChildProcessLike,
   type SpawnFn,
 } from '../src/service/process';
@@ -318,4 +319,73 @@ test('windowsDshInvocation：command 为传入 execPath，argsPrefix[0] 为 bin.
   assert.deepEqual(inv.argsPrefix, [
     'C:\\npm-global\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js',
   ]);
+});
+
+// —— resolveNpmGlobalNodeModules：桥接第 3 安装目标的基准目录 ——
+// 契约：installer 会把包名直接 join 到返回值之后，因此必须返回 **node_modules 目录**。
+// 回归重点：绝不返回 npm 前缀目录本身（真实缺陷：曾把桥接装到 <前缀>\dsh-vscode-bridge，
+// 而 dsh 进程的 ESM 解析锚点是 <前缀>\node_modules，导致兜底目标形同不存在）。
+
+test('resolveNpmGlobalNodeModules：从 PATH 里的 dsh.cmd 推导出 node_modules 目录', () => {
+  const path = 'C:\\Windows;C:\\Users\\x\\AppData\\Roaming\\npm';
+  const got = resolveNpmGlobalNodeModules(
+    undefined,
+    'win32',
+    path,
+    (p) => p === 'C:\\Users\\x\\AppData\\Roaming\\npm\\dsh.cmd',
+  );
+  assert.equal(got, 'C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules');
+  // 回归断言：绝不能是 npm 前缀目录（正是历史缺陷的形态）
+  assert.notEqual(got, 'C:\\Users\\x\\AppData\\Roaming\\npm');
+});
+
+test('resolveNpmGlobalNodeModules：显式 shim 路径优先于 PATH', () => {
+  const got = resolveNpmGlobalNodeModules(
+    'D:\\tools\\npm\\dsh.cmd',
+    'win32',
+    'C:\\Users\\x\\AppData\\Roaming\\npm',
+    () => false, // PATH 查找一律不可用也不影响：显式路径足够
+  );
+  assert.equal(got, 'D:\\tools\\npm\\node_modules');
+});
+
+test('resolveNpmGlobalNodeModules：显式 bin.js 路径上溯三级得到 node_modules', () => {
+  const got = resolveNpmGlobalNodeModules(
+    'C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js',
+    'win32',
+    undefined,
+    () => false,
+  );
+  assert.equal(got, 'C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules');
+});
+
+test('resolveNpmGlobalNodeModules：bin.js 路径不含 node_modules 时拒绝返回（宁可不装也不写错目录）', () => {
+  assert.equal(
+    resolveNpmGlobalNodeModules('C:\\weird\\bin.js', 'win32', undefined, () => false),
+    undefined,
+  );
+});
+
+test('resolveNpmGlobalNodeModules：shim 已在 node_modules 内时不重复追加一级', () => {
+  // …\node_modules\.bin\dsh.cmd → 上级才是 node_modules
+  assert.equal(
+    resolveNpmGlobalNodeModules('C:\\p\\node_modules\\.bin\\dsh.cmd', 'win32', undefined, () => false),
+    'C:\\p\\node_modules',
+  );
+  // 直接位于 node_modules 下（非常规但可推导）
+  assert.equal(
+    resolveNpmGlobalNodeModules('C:\\p\\node_modules\\dsh.cmd', 'win32', undefined, () => false),
+    'C:\\p\\node_modules',
+  );
+});
+
+test('resolveNpmGlobalNodeModules：非 Windows 或未定位到 dsh 时返回 undefined', () => {
+  // 仅 Windows 有 npm 全局兜底需求：其它平台保持双位置（向后兼容）
+  assert.equal(resolveNpmGlobalNodeModules('C:\\p\\dsh.cmd', 'linux', undefined, () => false), undefined);
+  assert.equal(resolveNpmGlobalNodeModules('C:\\p\\dsh.cmd', 'darwin', undefined, () => false), undefined);
+  // Windows 但 PATH 里没有 dsh.cmd → 不传第三目标
+  assert.equal(resolveNpmGlobalNodeModules(undefined, 'win32', 'C:\\Windows', () => false), undefined);
+  // PATH 为空串（等价于"无 PATH"）：注意不能用 undefined——默认参数会在实参为 undefined 时
+  // 回落成真实 process.env.PATH，那是本测试无法控制的宿主环境，会让断言随机器而变
+  assert.equal(resolveNpmGlobalNodeModules(undefined, 'win32', '', () => true), undefined);
 });
