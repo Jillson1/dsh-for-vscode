@@ -31,5 +31,14 @@
   "dsh.cmd.diffRevert.title": "DSH: 撤销最近一处修改",
   "dsh.cmd.diffKeep.title": "DSH: 保留最近一处修改",
   "dsh.cmd.diffRevertAll.title": "DSH: 撤销当前文件全部修改",
-  "dsh.cmd.diffClearMarks.title": "DSH: 清除当前文件标记（保留改动）"
+  "dsh.cmd.diffClearMarks.title": "DSH: 清除当前文件标记（保留改动）",
+  "dsh.view.changes.name": "DSH 变更",
+  "dsh.cmd.changeNext.title": "DSH: 跳到下一处变更",
+  "dsh.cmd.changePrev.title": "DSH: 跳到上一处变更",
+  "dsh.cmd.changeOpen.title": "打开并定位",
+  "dsh.cmd.changeKeep.title": "保留这处修改",
+  "dsh.cmd.changeRevert.title": "丢弃这处修改",
+  "dsh.cmd.fileKeepAll.title": "保留本文件全部修改",
+  "dsh.cmd.fileRevertAll.title": "丢弃本文件全部修改",
+  "dsh.cmd.changesRefresh.title": "刷新变更列表"
 }

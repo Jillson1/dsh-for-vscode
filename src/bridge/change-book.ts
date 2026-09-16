@@ -192,6 +192,34 @@ export class ChangeBook {
     return out.sort((a, b) => a.time - b.time)
   }
 
+  /**
+   * 按绝对路径取记录（**跨会话**；时间升序）。
+   *
+   * 存在意义：F2 导航与 F3 树的"文件"维度并不知道用户在哪个会话——用户打开一个文件按 F8，
+   * 期望游走的是"这个文件上的 DSH 变更"，而不是"当前会话恰好也碰过这个文件的那部分"。
+   */
+  recordsForPath(absPath: string): readonly ChangeRecord[] {
+    const key = pathKey(absPath)
+    const out: ChangeRecord[] = []
+    for (const files of this.index.values()) {
+      const list = files.get(key)
+      if (list !== undefined) out.push(...list)
+    }
+    return out.sort((a, b) => a.time - b.time)
+  }
+
+  /** 账本里出现过的全部绝对路径（跨会话去重，升序） */
+  allPaths(): readonly string[] {
+    const seen = new Map<string, string>()
+    for (const files of this.index.values()) {
+      for (const [key, list] of files) {
+        const first = list[0]
+        if (first !== undefined && !seen.has(key)) seen.set(key, first.absPath)
+      }
+    }
+    return [...seen.values()].sort()
+  }
+
   /** 账本里的全部会话 id（升序，便于树渲染稳定） */
   sessions(): readonly string[] {
     return [...this.index.keys()].sort()

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { ServiceManager } from '../service/manager';
 import { handleBridgeMessage, type BridgeUplinkEvent } from '../bridge/host';
 import { DiffService } from '../bridge/diff-service';
+import { revealLineInEditor } from '../editorReveal';
 import { t } from '../i18n';
 import {
   loadingPage,
@@ -159,16 +160,10 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
         const { promises: fs } = await import('node:fs');
         return fs.readFile(p, 'utf8');
       },
-      // edit 场景精确跳行：打开后 revealRange 定位到 1-based 修改起始行并高亮居中
+      // edit 场景精确跳行：打开后定位到 1-based 修改起始行并高亮居中。
+      // 实现收敛在 editorReveal.ts（F2 导航与 F3 树共用同一份，避免三处细节漂移）。
       revealLine: async (p, line) => {
-        const editor = await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
-        const doc = editor.document;
-        const start = new vscode.Position(line - 1, 0);
-        // 行号越界由 validateRange 归一：文档末尾行数不足时定位到最后一行
-        const end = doc.lineAt(Math.min(line - 1, doc.lineCount - 1)).range.end;
-        const range = doc.validateRange(new vscode.Range(start, end));
-        editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-        editor.selection = new vscode.Selection(range.start, range.end);
+        await revealLineInEditor(p, line);
       },
       // A 组：applied diff → 修改服务记录（高亮 + 撤销栈）
       recordDiff: async (d) => {

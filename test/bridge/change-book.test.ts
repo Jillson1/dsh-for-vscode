@@ -298,3 +298,20 @@ test('refreshHash：补正"记录时哈希"且不影响其他字段（running→
   book.refreshHash('c1', '');
   assert.deepEqual(book.staleFor('D:/w/src/a.ts', contentHash('whatever')), []);
 });
+
+test('recordsForPath / allPaths：跨会话按路径查询（F2 导航与 F3 树的"文件"维度）', () => {
+  const book = new ChangeBook();
+  book.add(input({ callId: 'c1', sessionId: 's1', absPath: 'D:/w/src/a.ts', time: 300 }));
+  book.add(input({ callId: 'c2', sessionId: 's2', absPath: 'D:/w/src/a.ts', time: 100 }));
+  book.add(input({ callId: 'c3', sessionId: 's1', absPath: 'D:/w/src/b.ts', time: 200 }));
+
+  // 跨会话按路径取，时间升序（用户按 F8 游走的是"这个文件上的变更"，不分会话）
+  assert.deepEqual(
+    book.recordsForPath('D:/w/src/a.ts').map((r) => r.callId),
+    ['c2', 'c1'],
+  );
+  assert.deepEqual(book.recordsForPath('D:/w/none.ts'), []);
+  // 全部路径去重升序
+  assert.deepEqual(book.allPaths(), ['D:/w/src/a.ts', 'D:/w/src/b.ts']);
+  assert.deepEqual(new ChangeBook().allPaths(), []);
+});

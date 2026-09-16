@@ -20,7 +20,11 @@ import {
 } from './bridge/installer';
 import { evaluateBridgeStatus, bridgeWarningText } from './bridge/status';
 import { DiffService } from './bridge/diff-service';
+import { locateNewText } from './bridge/diff-tracker';
 import { ChangeBook, type RevertOutcome } from './bridge/change-book';
+import { ChangeNavigator } from './changes/change-navigation';
+import { ChangesTreeProvider, type ChangeTreeNode } from './changes/changes-tree';
+import { revealLineInEditor } from './editorReveal';
 
 let manager: ServiceManager | null = null;
 let output: vscode.OutputChannel | null = null;
@@ -356,9 +360,135 @@ export function activate(context: vscode.ExtensionContext): void {
     appendLog(
       `[book] 恢复 ${restored} 条变更记录（账本 ${changeBook.count()} 条 / ${sessionIds.length} 个会话）`,
     );
+    updateChangeContext(); // F2：激活时即评估 F8 是否接管当前文件
   }
 
   // 左右两侧各一个 provider 实例，共享同一 manager（服务状态一致）
+  // —— F2 变更导航（F8 / Shift+F8）+ F3 `DSH Changes` 树 ——
+  // 状态栏计数项：显示"3/12"，点击等同按 F8（延续"导航状态要有一处可见的进度"）
+  const changeCounter = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+  changeCounter.command = 'dsh.change.next';
+
+  const changeNavigator = new ChangeNavigator({
+    book: changeBook,
+    // 适配成导航层的"最小编辑器接口"：只暴露路径与内存文本，
+    // 导航逻辑因此完全不依赖 vscode 类型（可用假实现单测）
+    activeEditor: () => {
+      const ed = vscode.window.activeTextEditor;
+      if (ed === undefined) return undefined;
+      return { fsPath: ed.document.uri.fsPath, getText: () => ed.document.getText() };
+    },
+    reveal: (path, line) => revealLineInEditor(path, line).then(() => undefined),
+    readFileText: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      return fs.readFile(p, 'utf8');
+    },
+    status: (text) => {
+      if (text === undefined) {
+        changeCounter.hide();
+        return;
+      }
+      changeCounter.text = `$(diff-modified) DSH 变更 ${text}`;
+      changeCounter.tooltip = 'DSH 变更导航（点击跳到下一处）';
+      changeCounter.show();
+    },
+    notify: (m) => void vscode.window.showInformationMessage(m),
+    log: (m) => appendLog(`[nav] ${m}`),
+  });
+
+  const changesTree = new ChangesTreeProvider({
+    book: changeBook,
+    readFileText: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      return fs.readFile(p, 'utf8');
+    },
+    log: (m) => appendLog(`[tree] ${m}`),
+  });
+  const changesView = vscode.window.createTreeView('dsh.changes', {
+    treeDataProvider: changesTree,
+    showCollapseAll: true,
+  });
+
+  /**
+   * 打开变更所在文件并定位到该处（F3 树点击 / 命令面板）。
+   *
+   * 定位基准的选择：优先用**已打开文档的内存文本**（用户可能有未保存改动，磁盘内容会偏），
+   * 没有打开过才读磁盘。定位失败（newText 已被手改）就只打开文件——不硬跳到第 1 行假装成功。
+   */
+  async function openChange(node: ChangeTreeNode): Promise<void> {
+    if (node.kind !== 'change') return;
+    const rec = changeBook.get(node.sessionId, node.view.callId);
+    if (rec === undefined) return;
+    let content: string | null = null;
+    const openDoc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === rec.absPath);
+    if (openDoc !== undefined) {
+      content = openDoc.getText();
+    } else {
+      try {
+        const { promises: fs } = await import('node:fs');
+        content = await fs.readFile(rec.absPath, 'utf8');
+      } catch {
+        content = null; // 读不到：仅打开文件
+      }
+    }
+    const line = (content === null ? null : locateNewText(content, rec.newText)?.line) ?? 1;
+    await revealLineInEditor(rec.absPath, line);
+    appendLog(`[change] open ${rec.absPath}:${line} callId=${rec.callId}`);
+  }
+
+  /** 保留一处（树/命令面板）：走 DiffService.keep —— 它同时移除栈与账本条目 */
+  async function keepChange(node: ChangeTreeNode): Promise<void> {
+    if (node.kind !== 'change') return;
+    const r = await ds?.keep(node.view.callId);
+    appendLog(`[change] keep ${node.view.callId} ok=${r?.ok ?? false}`);
+  }
+
+  /** 丢弃一处：账本委托执行（成功才移除记录），失败把原因如实告诉用户 */
+  async function revertChange(node: ChangeTreeNode): Promise<void> {
+    if (node.kind !== 'change') return;
+    const outcome = await changeBook.revert(node.sessionId, node.view.callId);
+    appendLog(`[change] revert ${node.view.callId} → ${outcome.status}${outcome.status === 'reverted' ? '' : ` (${outcome.reason})`}`);
+    if (outcome.status !== 'reverted') {
+      void vscode.window.showWarningMessage(`未能丢弃该处修改：${outcome.status}（${outcome.reason}）`);
+    }
+  }
+
+  /** 保留文件全部（树）：逐条走 keep，保持栈与账本同步 */
+  async function keepAllInFile(node: ChangeTreeNode): Promise<void> {
+    if (node.kind !== 'file') return;
+    let done = 0;
+    for (const c of node.view.changes) {
+      const r = await ds?.keep(c.callId);
+      if (r?.ok === true) done += 1;
+    }
+    appendLog(`[change] keepAll ${node.view.absPath} → ${done}/${node.view.changes.length}`);
+  }
+
+  /** 丢弃文件全部（树）：逐条执行、逐条报告（F4 的批量语义，T3 再补会话级） */
+  async function revertAllInFile(node: ChangeTreeNode): Promise<void> {
+    if (node.kind !== 'file') return;
+    const outcomes = await changeBook.revertAll(node.sessionId, node.view.absPath);
+    const ok = outcomes.filter((o) => o.status === 'reverted').length;
+    const failed = outcomes.length - ok;
+    appendLog(`[change] revertAll ${node.view.absPath} → 成功 ${ok} 失败 ${failed}`);
+    if (failed > 0) {
+      void vscode.window.showWarningMessage(`已丢弃 ${ok} 处，${failed} 处未能丢弃（详见 DSH 输出）`);
+    }
+  }
+
+  /**
+   * 维护上下文键 `dsh.hasFileChanges`：F8 / Shift+F8 只在"当前文件确有 DSH 变更"时接管。
+   *
+   * 为什么要门控：F8 是 VS Code 内置的"下一个问题"（problems / 诊断跳转），无条件抢占会
+   * 破坏用户已有的工作流。门控后语义变成"有 DSH 变更时 F8 走变更导航，否则维持原行为"，
+   * 这也是贡献点里 `when: editorTextFocus && dsh.hasFileChanges` 的来源。
+   */
+  function updateChangeContext(): void {
+    const ed = vscode.window.activeTextEditor;
+    const has = ed !== undefined && changeBook.recordsForPath(ed.document.uri.fsPath).length > 0;
+    void vscode.commands.executeCommand('setContext', 'dsh.hasFileChanges', has);
+  }
+
   const panelPrimary = new DshPanelProvider(
     manager,
     () => {
@@ -437,9 +567,35 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('dsh.diff.revertAll', () => void revertAllDiffs()),
     // 清除当前文件的全部 DSH 标记（保留改动）：记录/装饰错位时的一键清理入口
     vscode.commands.registerCommand('dsh.diff.clearMarks', () => void clearMarksForActive()),
+    // —— F2 变更导航 ——
+    vscode.commands.registerCommand('dsh.change.next', () => void changeNavigator.next()),
+    vscode.commands.registerCommand('dsh.change.prev', () => void changeNavigator.prev()),
+    // —— F3 `DSH Changes` 树 ——
+    vscode.commands.registerCommand('dsh.changes.refresh', () => changesTree.refresh()),
+    vscode.commands.registerCommand('dsh.change.open', (node?: ChangeTreeNode) =>
+      node === undefined ? undefined : void openChange(node),
+    ),
+    vscode.commands.registerCommand('dsh.change.keep', (node?: ChangeTreeNode) =>
+      node === undefined ? undefined : void keepChange(node),
+    ),
+    vscode.commands.registerCommand('dsh.change.revert', (node?: ChangeTreeNode) =>
+      node === undefined ? undefined : void revertChange(node),
+    ),
+    vscode.commands.registerCommand('dsh.file.keepAll', (node?: ChangeTreeNode) =>
+      node === undefined ? undefined : void keepAllInFile(node),
+    ),
+    vscode.commands.registerCommand('dsh.file.revertAll', (node?: ChangeTreeNode) =>
+      node === undefined ? undefined : void revertAllInFile(node),
+    ),
+    changesView,
+    changeCounter,
+    changesTree,
+    // 账本变化（新增/保留/丢弃）→ 重新评估 F8 是否接管当前文件
+    changeBook.onChange(() => updateChangeContext()),
     // 编辑器切换时刷新高亮（文件打开/聚焦时把已记录修改标出来）
     vscode.window.onDidChangeActiveTextEditor((ed) => {
       if (ed && ds) ds.refreshFile(ed.document.uri.fsPath);
+      updateChangeContext(); // 换文件 → 重新评估 F8 是否应接管
     }),
     // 编辑器可见集合变化（分屏/切组/新开标签）→ 重建所有可见文件的高亮
     vscode.window.onDidChangeVisibleTextEditors(() => {

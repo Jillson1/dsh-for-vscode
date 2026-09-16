@@ -31,5 +31,14 @@
   "dsh.cmd.diffRevert.title": "DSH: Revert Last Modification",
   "dsh.cmd.diffKeep.title": "DSH: Keep Last Modification",
   "dsh.cmd.diffRevertAll.title": "DSH: Revert All Modifications",
-  "dsh.cmd.diffClearMarks.title": "DSH: Clear Marks (Keep Changes)"
+  "dsh.cmd.diffClearMarks.title": "DSH: Clear Marks (Keep Changes)",
+  "dsh.view.changes.name": "DSH Changes",
+  "dsh.cmd.changeNext.title": "DSH: Next Change",
+  "dsh.cmd.changePrev.title": "DSH: Previous Change",
+  "dsh.cmd.changeOpen.title": "Open Change",
+  "dsh.cmd.changeKeep.title": "Keep Change",
+  "dsh.cmd.changeRevert.title": "Discard Change",
+  "dsh.cmd.fileKeepAll.title": "Keep All Changes in File",
+  "dsh.cmd.fileRevertAll.title": "Discard All Changes in File",
+  "dsh.cmd.changesRefresh.title": "Refresh Change List"
 }

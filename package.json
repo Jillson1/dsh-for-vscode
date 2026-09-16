@@ -16,6 +16,7 @@
   "activationEvents": [
     "onView:dsh.panel",
     "onView:dsh.panel.secondary",
+    "onView:dsh.changes",
     "onCommand:dsh.openPanel",
     "onCommand:dsh.openSecondary",
     "onCommand:dsh.openExternal",
@@ -32,7 +33,15 @@
     "onCommand:dsh.diff.revert",
     "onCommand:dsh.diff.keep",
     "onCommand:dsh.diff.revertAll",
-    "onCommand:dsh.diff.clearMarks"
+    "onCommand:dsh.diff.clearMarks",
+    "onCommand:dsh.change.next",
+    "onCommand:dsh.change.prev",
+    "onCommand:dsh.change.open",
+    "onCommand:dsh.change.keep",
+    "onCommand:dsh.change.revert",
+    "onCommand:dsh.file.keepAll",
+    "onCommand:dsh.file.revertAll",
+    "onCommand:dsh.changes.refresh"
   ],
   "contributes": {
     "viewsContainers": {
@@ -57,6 +66,10 @@
           "id": "dsh.panel",
           "name": "%dsh.view.panel.name%",
           "type": "webview"
+        },
+        {
+          "id": "dsh.changes",
+          "name": "%dsh.view.changes.name%"
         }
       ],
       "dsh-secondary": [
@@ -170,9 +183,67 @@
         "command": "dsh.diff.clearMarks",
         "title": "%dsh.cmd.diffClearMarks.title%",
         "category": "DSH"
+      },
+      {
+        "command": "dsh.change.next",
+        "title": "%dsh.cmd.changeNext.title%",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.change.prev",
+        "title": "%dsh.cmd.changePrev.title%",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.change.open",
+        "title": "%dsh.cmd.changeOpen.title%",
+        "icon": "$(go-to-file)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.change.keep",
+        "title": "%dsh.cmd.changeKeep.title%",
+        "icon": "$(check)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.change.revert",
+        "title": "%dsh.cmd.changeRevert.title%",
+        "icon": "$(discard)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.file.keepAll",
+        "title": "%dsh.cmd.fileKeepAll.title%",
+        "icon": "$(check-all)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.file.revertAll",
+        "title": "%dsh.cmd.fileRevertAll.title%",
+        "icon": "$(discard)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.changes.refresh",
+        "title": "%dsh.cmd.changesRefresh.title%",
+        "icon": "$(refresh)",
+        "category": "DSH"
       }
     ],
-    "menus": {
+    "keybindings": [
+    {
+      "command": "dsh.change.next",
+      "key": "f8",
+      "when": "editorTextFocus && dsh.hasFileChanges"
+    },
+    {
+      "command": "dsh.change.prev",
+      "key": "shift+f8",
+      "when": "editorTextFocus && dsh.hasFileChanges"
+    }
+  ],
+  "menus": {
       "explorer/context": [
         {
           "command": "dsh.addFileToDsh",
@@ -187,7 +258,39 @@
           "when": "editorTextFocus && resourceScheme == file"
         }
       ],
+      "view/item/context": [
+        {
+          "command": "dsh.change.open",
+          "when": "view == dsh.changes && viewItem == dsh.change",
+          "group": "inline"
+        },
+        {
+          "command": "dsh.change.keep",
+          "when": "view == dsh.changes && viewItem == dsh.change",
+          "group": "1_dsh@1"
+        },
+        {
+          "command": "dsh.change.revert",
+          "when": "view == dsh.changes && viewItem == dsh.change",
+          "group": "1_dsh@2"
+        },
+        {
+          "command": "dsh.file.keepAll",
+          "when": "view == dsh.changes && viewItem == dsh.file",
+          "group": "1_dsh@1"
+        },
+        {
+          "command": "dsh.file.revertAll",
+          "when": "view == dsh.changes && viewItem == dsh.file",
+          "group": "1_dsh@2"
+        }
+      ],
       "view/title": [
+        {
+          "command": "dsh.changes.refresh",
+          "when": "view == dsh.changes",
+          "group": "navigation@1"
+        },
         {
           "command": "dsh.openExternal",
           "when": "view == dsh.panel || view == dsh.panel.secondary",
