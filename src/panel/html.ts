@@ -21,12 +21,24 @@ export type PanelMessage =
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
   | { type: 'bridgeInjectComposer'; text: string }
   | { type: 'bridgeAck'; ok: boolean; capabilities?: string[] }
-  // —— 交互增强（bridge 0.4.0）上行消息：T0 只做落点（host 打日志），后续阶段各自接管 ——
-  | { type: 'bridgeSessionState'; sessionId: string; running: boolean; turn: number; pending: number }
+  // —— 交互增强（bridge 0.4.0）上行消息 ——
+  | ({ type: 'bridgeSessionState' } & SessionStateMsg)
   | { type: 'bridgeApprovalRequest'; sessionId: string; approvalId: string; toolName: string; callId?: string; reason?: string }
   | { type: 'bridgeQuestionRequest'; sessionId: string; questionId: string; questions: unknown[] }
   | { type: 'bridgeChangesSync'; sessionId: string; records: unknown[] }
   | { type: 'bridgeCheckpointsReady'; ok: boolean; sessionId?: string; error?: string };
+
+/**
+ * F7 会话状态（插件上报的 agent 运行态）。
+ * 单独导出形状的原因：它是"消息 + 状态机输入"共用的数据类型，
+ * 两处各自内联会让字段名一改就静默不同步（agent-state.ts 直接复用它）。
+ */
+export interface SessionStateMsg {
+  readonly sessionId: string
+  readonly running: boolean
+  readonly turn: number
+  readonly pending: number
+}
 
 /**
  * 扩展 → 页面（下行）消息类型（bridge 0.4.0）。

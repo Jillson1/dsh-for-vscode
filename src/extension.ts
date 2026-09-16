@@ -9,7 +9,7 @@ import { probeService } from './service/detect';
 import { createProcessRunner, findInPath, resolveNpmGlobalNodeModules } from './service/process';
 import { ServiceManager, type ManagerOptions } from './service/manager';
 import { DshPanelProvider } from './panel/provider';
-import { StatusBarController } from './statusbar';
+import { AgentStatusController, StatusBarController } from './statusbar';
 import { resolveWorkspaceRoot } from './workspaceRoot';
 import { addFileToDsh, addSelectionToDsh, type AddToDshTargets } from './addToDsh';
 import {
@@ -19,6 +19,14 @@ import {
   type BridgeInstallResult,
 } from './bridge/installer';
 import { evaluateBridgeStatus, bridgeWarningText } from './bridge/status';
+import { ApprovalRouter } from './bridge/approval-router';
+import {
+  applySessionState,
+  turnCompleteMessage,
+  IDLE_AGENT_STATE,
+  type AgentState,
+  type TurnCompleteNotice,
+} from './bridge/agent-state';
 import { DiffService } from './bridge/diff-service';
 import { locateNewText } from './bridge/diff-tracker';
 import { ChangeBook, type RevertOutcome } from './bridge/change-book';
@@ -224,9 +232,67 @@ export function activate(context: vscode.ExtensionContext): void {
     clearHandshakeTimer();
   }
 
-  /** 交互增强（bridge 0.4.0）上行消息落点：T0 打桩（打日志），后续阶段由各服务接管 */
-  function logBridgeEvent(event: { name: string; [k: string]: unknown }): void {
+  // —— F6/F7：上行消息的真实落点 ——
+  // sessionState → agent 状态机（状态栏 + 完成通知）；approvalRequest → 审批路由器（模态框代答）；
+  // question/changesSync/checkpointsReady 仍是打桩（F8/F9 接管）。所有事件都进日志，便于排障。
+  let agentState: AgentState = IDLE_AGENT_STATE;
+
+  /** F7：本轮完成通知（只在本轮确有变更时才会被调用，见 agent-state.ts） */
+  function notifyTurnComplete(notice: TurnCompleteNotice): void {
+    void vscode.window
+      .showInformationMessage(turnCompleteMessage(notice), t('msg.viewChanges'))
+      .then((choice) => {
+        if (choice !== undefined) void vscode.commands.executeCommand('dsh.changes.focus');
+      });
+  }
+
+  /** F7：应用一次会话状态（账本计数作为"本轮改了多少"的基线） */
+  function applyState(sessionState: { sessionId: string; running: boolean; turn: number; pending: number }): void {
+    const { next, notice } = applySessionState(
+      agentState,
+      {
+        ...sessionState,
+        changeCount: changeBook.count(),
+        fileCount: changeBook.allPaths().length,
+      },
+      { notifyOnTurnComplete: readConfig().config.notifyOnTurnComplete },
+    );
+    agentState = next;
+    agentStatus.update(next);
+    if (notice !== null) notifyTurnComplete(notice);
+  }
+
+  /** F6：审批路由器（模态框文案与安全边界都在 approval-router.ts 的纯逻辑里） */
+  const approvalRouter = new ApprovalRouter({
+    // showWarningMessage 返回 Thenable，这里用 async 包一层：依赖签名要的是 Promise
+    ask: async (prompt, allow, deny) => vscode.window.showWarningMessage(prompt, { modal: true }, allow, deny),
+    // 下发给可见面板：左右两个实例都试一次，任一可达即算送达
+    send: (message) => panelPrimary.postToPage(message) || panelSecondary.postToPage(message),
+    notify: (m) => void vscode.window.showWarningMessage(m),
+    log: (m) => appendLog(`[approval] ${m}`),
+  });
+
+  /** 上行事件统一入口（注入给两个面板 provider） */
+  function onUplinkEvent(event: { name: string; [k: string]: unknown }): void {
     appendLog(`[bridge] event ${event.name} ${JSON.stringify(event)}`);
+    if (event.name === 'sessionState') {
+      applyState({
+        sessionId: String(event.sessionId ?? ''),
+        running: event.running === true,
+        turn: typeof event.turn === 'number' ? event.turn : 0,
+        pending: typeof event.pending === 'number' ? event.pending : 0,
+      });
+      return;
+    }
+    if (event.name === 'approvalRequest') {
+      void approvalRouter.onRequest({
+        sessionId: String(event.sessionId ?? ''),
+        approvalId: String(event.approvalId ?? ''),
+        toolName: String(event.toolName ?? ''),
+        callId: typeof event.callId === 'string' ? event.callId : undefined,
+        reason: typeof event.reason === 'string' ? event.reason : undefined,
+      });
+    }
   }
 
   /** 任一面板首次打开：标记已打开并尝试启动握手超时（幂等，不重复建定时器） */
@@ -547,7 +613,7 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaceRootGetter, // workspaceRoot：文件相对路径解析的兜底基准
     bridgeEnabledGetter, // bridgeEnabled：dsh.bridge.enabled 驱动握手脚本注入
     diffService, // A 组：修改服务（recordDiff / bridgeDiffApplied 共用）
-    logBridgeEvent, // bridge 0.4.0：交互增强上行消息落点（T0 打桩）
+    onUplinkEvent, // F6/F7：上行事件落点（sessionState / approvalRequest 已接管）
   );
   const panelSecondary = new DshPanelProvider(
     manager,
@@ -556,9 +622,11 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaceRootGetter,
     bridgeEnabledGetter,
     diffService,
-    logBridgeEvent,
+    onUplinkEvent,
   );
   new StatusBarController(manager);
+  // F7：agent 状态项（与"服务状态"分开：一个是进程活着，一个是 agent 在干什么）
+  const agentStatus = new AgentStatusController();
 
   // 服务就绪后启动握手超时（若面板已打开）
   manager.onChange((s) => {
@@ -656,6 +724,7 @@ export function activate(context: vscode.ExtensionContext): void {
     changesView,
     changeCounter,
     changesTree,
+    agentStatus,
     // 账本变化（新增/保留/丢弃）→ 重新评估 F8 是否接管当前文件
     changeBook.onChange(() => updateChangeContext()),
     // 编辑器切换时刷新高亮（文件打开/聚焦时把已记录修改标出来）

@@ -18,6 +18,8 @@ export interface RawDshConfig {
   silenceWarning?: boolean;
   /** dsh 可执行文件绝对路径（空串 = 用 PATH 里的 dsh） */
   executablePath?: string;
+  /** 轮次完成时是否弹通知（dsh.notify.onTurnComplete） */
+  notifyOnTurnComplete?: boolean;
 }
 
 /** 规范化后的配置（均有合法默认值） */
@@ -35,6 +37,8 @@ export interface DshConfig {
   silenceWarning: boolean;
   /** dsh 可执行文件绝对路径（空串 = 用 PATH 里的 dsh） */
   executablePath: string;
+  /** 轮次完成时是否弹通知 */
+  notifyOnTurnComplete: boolean;
 }
 
 /** 默认配置 */
@@ -48,6 +52,7 @@ export const DEFAULTS: DshConfig = {
   workspaceRootIndex: 0,
   silenceWarning: false,
   executablePath: '',
+  notifyOnTurnComplete: true,
 };
 
 /** 安全边界：仅允许回环地址 */
@@ -114,10 +119,14 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
   // executablePath：非字符串静默回退默认 ''；空字符串合法（表示用 PATH 里的 dsh）
   const executablePath = typeof raw.executablePath === 'string' ? raw.executablePath : DEFAULTS.executablePath;
 
+  // F7 通知设置：仅接受布尔值，否则回退默认（默认开通知、关声音——过度弹窗是明确反对项）
+  const notifyOnTurnComplete =
+    typeof raw.notifyOnTurnComplete === 'boolean' ? raw.notifyOnTurnComplete : DEFAULTS.notifyOnTurnComplete;
+
   return {
     config: {
       host, port, autoStart, stopOnExit, extraArgs, bridgeEnabled, workspaceRootIndex,
-      silenceWarning, executablePath,
+      silenceWarning, executablePath, notifyOnTurnComplete,
     },
     errors,
   };
@@ -136,5 +145,6 @@ export function readConfig(): { config: DshConfig; errors: string[] } {
     workspaceRootIndex: ws.get<number>('workspaceRootIndex'),
     silenceWarning: ws.get<boolean>('bridge.silenceWarning'),
     executablePath: ws.get<string>('executablePath'),
+    notifyOnTurnComplete: ws.get<boolean>('notify.onTurnComplete'),
   });
 }

@@ -43,5 +43,6 @@
   "dsh.cmd.changesRefresh.title": "Refresh Change List",
   "dsh.cmd.sessionKeepAll.title": "Keep All Changes in Session",
   "dsh.cmd.sessionRevertAll.title": "Discard All Changes in Session",
-  "dsh.cmd.diffKeepAll.title": "DSH: Keep All Modifications in File"
+  "dsh.cmd.diffKeepAll.title": "DSH: Keep All Modifications in File",
+  "dsh.config.notifyOnTurnComplete": "Show a notification when a DSH turn finishes (only when the turn actually changed files)."
 }

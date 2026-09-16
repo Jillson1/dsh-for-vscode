@@ -406,6 +406,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "%dsh.config.executablePath%"
+        },
+        "dsh.notify.onTurnComplete": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.notifyOnTurnComplete%"
         }
       }
     }

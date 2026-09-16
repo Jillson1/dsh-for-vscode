@@ -11,6 +11,8 @@ test('合法配置原样通过', () => {
   assert.deepEqual(config, {
     host: 'localhost', port: 4000, autoStart: false, stopOnExit: false, extraArgs: ['--trusted-host', 'x:1'],
     bridgeEnabled: true, workspaceRootIndex: 0, silenceWarning: false, executablePath: '',
+    // F7：通知默认开（仅在本轮确有变更时才弹，见 agent-state.ts）
+    notifyOnTurnComplete: true,
   });
 });
 

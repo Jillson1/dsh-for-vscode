@@ -43,5 +43,6 @@
   "dsh.cmd.changesRefresh.title": "刷新变更列表",
   "dsh.cmd.sessionKeepAll.title": "保留本会话全部修改",
   "dsh.cmd.sessionRevertAll.title": "丢弃本会话全部修改",
-  "dsh.cmd.diffKeepAll.title": "DSH: 保留当前文件全部修改"
+  "dsh.cmd.diffKeepAll.title": "DSH: 保留当前文件全部修改",
+  "dsh.config.notifyOnTurnComplete": "DSH 每一轮结束时弹通知（仅当本轮确实改动了文件时才提示）。"
 }
