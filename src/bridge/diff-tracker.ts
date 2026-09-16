@@ -430,6 +430,28 @@ export function userAppendedPart(content: string, written: string): string | nul
 }
 
 /**
+ * 决定一条记录当前应在文件的哪一行落高亮（1-based）；**定位不到就返回 null**。
+ *
+ * 这条规则统一了此前不一致的两条路径（真机缺陷的根因）：
+ * - `refreshFile`（切换 tab / 文件打开）原本就 `locateNewText === null → 跳过`；
+ * - `applyDecoration`（record 与 adopt 走这条）原本回退到 `rec.line`，而恢复出来的记录
+ *   `line` 是占位值 1 → 表现为"整份文件从第 1 行起被标成新增"（创建文件时那条 write 记录
+ *   的 newText 是整份旧内容，用户改了文件后它自然定位不到）。
+ *
+ * 语义取舍：**宁可没有标记，也不要标在错误的位置**——错误的整片高亮会让人以为 DSH 改了整份文件，
+ * 而 hover 又查不到对应记录（自相矛盾的界面）。历史记录本身仍留在账本/树里（可看可处置）。
+ *
+ * @param content 以**将要高亮的那个文档**的内存文本为基准（与 refreshFile 一致）
+ * @param newText 记录的改后片段
+ * @returns 1-based 行号；newText 为空或找不到 → null
+ */
+export function decorationTargetLine(content: string, newText: string): number | null {
+  if (typeof content !== 'string' || typeof newText !== 'string' || newText === '') return null;
+  const loc = locateNewText(content, newText);
+  return loc === null ? null : loc.line;
+}
+
+/**
  * 修改栈（内存）：按 callId 去重（同一次修改重复广播只记一条），支持按路径/全部撤销。
  * 纯数据容器，thread-safe 由调用方保证（扩展主线程单线程）。
  */

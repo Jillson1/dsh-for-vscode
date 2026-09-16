@@ -14,6 +14,7 @@ import {
   pathsEqual,
   redGreenLines,
   mergeLineMarks,
+  decorationTargetLine,
   diffNature,
   summarizeDiff,
   deletedLines,
@@ -271,14 +272,23 @@ export class DiffService {
   }
 
   /** 把一条记录的红绿行高亮落到可见编辑器（文件已打开则立即显示）。 */
-  private applyDecoration(rec: ModificationRecord, content: string | null): void {
+  private applyDecoration(rec: ModificationRecord, _content: string | null): void {
     const editor = this.findEditor(rec.path);
     if (!editor) {
       this.deps.log?.(`applyDecoration: 未找到已打开的编辑器（path=${rec.path}），等待打开时 refreshFile`);
       return; // 文件未打开：不抢占编辑器；打开时由 refreshFile 补高亮
     }
-    const line = content !== null ? locateNewText(content, rec.newText) : null;
-    const startLine = line !== null ? line.line : rec.line; // 定位失败回退记录行号（尽力而为）
+    // 定位基准统一用**编辑器的内存文档**：与 refreshFile 同源。
+    // 之前用传入的 content（record 时刚从磁盘读的）会让"磁盘定位 + 内存高亮"错位（A 组踩过同类坑）。
+    const startLine = decorationTargetLine(editor.document.getText(), rec.newText);
+    if (startLine === null) {
+      // 定位失败**不回退占位行号**：那会把整片内容误标成新增（真机缺陷）。
+      // 该记录仍留在栈/账本/树里，只是不高亮——宁可无标记，也不要标错位置。
+      this.deps.log?.(
+        `applyDecoration: 跳过（newText 已不在文档中，不误标）path=${rec.path} newText=${rec.newText.slice(0, 30)}`,
+      );
+      return;
+    }
     this.deps.log?.(`applyDecoration: 高亮 path=${rec.path} startLine=${startLine} newText=${rec.newText.slice(0, 30)}`);
     this.highlightLines(rec, editor, startLine);
   }

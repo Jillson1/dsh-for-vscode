@@ -23,6 +23,7 @@ import {
   planDiscard,
   writtenContentMatches,
   userAppendedPart,
+  decorationTargetLine,
   type AppliedDiffInput,
   type ModificationRecord,
 } from '../../src/bridge/diff-tracker';
@@ -394,6 +395,36 @@ test('locateOldText 兼容 CRLF/LF', () => {
   const loc = locateOldText(content, 'y');
   assert.ok(loc !== null);
   assert.equal(loc.line, 2);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// decorationTargetLine：定位不到就返回 null（真机缺陷回归）
+// 缺陷现象：恢复出来的 write 新建记录 line 是占位值 1，applyDecoration 回退到 rec.line
+// → 用户改过文件后，整份文件从第 1 行起被标成"新增"（错误的整片高亮）。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('decorationTargetLine 命中 → 返回 1-based 行号', () => {
+  const content = 'l1\nl2\nconst x = 2\nl4\n';
+  assert.equal(decorationTargetLine(content, 'const x = 2'), 3);
+});
+
+test('decorationTargetLine newText 已不在文档中 → null（不误标，不回退占位行）', () => {
+  // 记录来自 write 新建（newText = 当时整份内容），用户后来改了文件 → 定位不到
+  const content = '用户改过的全新内容\n第二行\n';
+  assert.equal(decorationTargetLine(content, '# 原始标题\n\n原始正文\n'), null);
+});
+
+test('decorationTargetLine newText 为空 → null（无锚点不落高亮）', () => {
+  assert.equal(decorationTargetLine('a\nb\n', ''), null);
+});
+
+test('decorationTargetLine 兼容 CRLF/LF：LF 片段在 CRLF 文档里可定位', () => {
+  assert.equal(decorationTargetLine('a\r\nconst x = 2\r\n', 'const x = 2'), 2);
+});
+
+test('decorationTargetLine 入参非字符串 → null（防御）', () => {
+  assert.equal(decorationTargetLine(undefined as unknown as string, 'x'), null);
+  assert.equal(decorationTargetLine('x', undefined as unknown as string), null);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
