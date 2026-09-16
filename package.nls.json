@@ -44,5 +44,10 @@
   "dsh.cmd.sessionKeepAll.title": "Keep All Changes in Session",
   "dsh.cmd.sessionRevertAll.title": "Discard All Changes in Session",
   "dsh.cmd.diffKeepAll.title": "DSH: Keep All Modifications in File",
-  "dsh.config.notifyOnTurnComplete": "Show a notification when a DSH turn finishes (only when the turn actually changed files)."
+  "dsh.config.notifyOnTurnComplete": "Show a notification when a DSH turn finishes (only when the turn actually changed files).",
+  "dsh.view.checkpoints.name": "DSH Checkpoints",
+  "dsh.welcome.checkpoints": "No checkpoints for this workspace.\n\nCheckpoints come from the DSH change ledger (turn-rewind plugin) and only exist for regular git worktrees; they appear after a DSH turn starts.",
+  "dsh.cmd.checkpointsRefresh.title": "Refresh Checkpoints",
+  "dsh.cmd.checkpointDiff.title": "Diff Against This Turn",
+  "dsh.cmd.checkpointRestore.title": "Restore Code To Before This Turn"
 }

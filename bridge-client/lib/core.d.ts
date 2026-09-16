@@ -147,13 +147,42 @@ export interface ChangesSyncMsg {
   records: ChangeRecordMsg[];
 }
 
-/** 检查点回执消息（F9） */
+/** 检查点回执消息（F9）：预览与应用共用一条 kind，用 phase 区分 */
 export interface CheckpointsReadyMsg {
   kind: 'checkpointsReady';
+  phase: 'preview' | 'apply';
   ok: boolean;
+  /** 扩展侧请求 id（预览/应用可能并发在飞，回执靠它配对） */
+  requestId?: string;
   sessionId?: string;
   error?: string;
+  code?: string;
+  turn?: number;
+  totalChanges?: number;
+  changes?: { path: string; kind: string }[];
+  truncated?: boolean;
+  restoreBlocked?: boolean;
+  headChanged?: boolean;
+  operationChanged?: boolean;
+  planId?: string;
+  confirmation?: string;
 }
+
+/** 检查点回执里最多透传的变更条数 */
+export const CHECKPOINT_CHANGE_LIMIT: number;
+
+/** 校验下行"检查点预览 / 恢复"（F9） */
+export function parseCheckpointRestore(d: unknown): {
+  kind: 'checkpointRestore';
+  phase: 'preview' | 'apply';
+  sessionId: string;
+  messageSeq: number;
+  checkpointId: string;
+  mode: 'code' | 'both';
+  requestId: string;
+  planId?: string;
+  confirmation?: string;
+} | null;
 
 /** 构造"会话状态"消息；缺 sessionId 返回 null */
 export function buildSessionStateMessage(p: unknown): SessionStateMsg | null;
@@ -220,4 +249,15 @@ export function parseDownlinkMessage(d: unknown):
   | { kind: 'approvalDecision'; sessionId: string; approvalId: string; outcome: 'allowed-once' | 'rejected' }
   | { kind: 'questionAnswer'; sessionId: string; questionId: string; answer: unknown }
   | { kind: 'requestChanges'; sessionId: string }
+  | {
+      kind: 'checkpointRestore';
+      phase: 'preview' | 'apply';
+      sessionId: string;
+      messageSeq: number;
+      checkpointId: string;
+      mode: 'code' | 'both';
+      requestId: string;
+      planId?: string;
+      confirmation?: string;
+    }
   | null;

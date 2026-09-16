@@ -17,6 +17,7 @@
     "onView:dsh.panel",
     "onView:dsh.panel.secondary",
     "onView:dsh.changes",
+    "onView:dsh.checkpoints",
     "onCommand:dsh.openPanel",
     "onCommand:dsh.openSecondary",
     "onCommand:dsh.openExternal",
@@ -44,7 +45,10 @@
     "onCommand:dsh.changes.refresh",
     "onCommand:dsh.session.keepAll",
     "onCommand:dsh.session.revertAll",
-    "onCommand:dsh.diff.keepAll"
+    "onCommand:dsh.diff.keepAll",
+    "onCommand:dsh.checkpoints.refresh",
+    "onCommand:dsh.checkpoint.diff",
+    "onCommand:dsh.checkpoint.restore"
   ],
   "contributes": {
     "viewsContainers": {
@@ -73,6 +77,10 @@
         {
           "id": "dsh.changes",
           "name": "%dsh.view.changes.name%"
+        },
+        {
+          "id": "dsh.checkpoints",
+          "name": "%dsh.view.checkpoints.name%"
         }
       ],
       "dsh-secondary": [
@@ -249,6 +257,24 @@
         "command": "dsh.diff.keepAll",
         "title": "%dsh.cmd.diffKeepAll.title%",
         "category": "DSH"
+      },
+      {
+        "command": "dsh.checkpoints.refresh",
+        "title": "%dsh.cmd.checkpointsRefresh.title%",
+        "icon": "$(refresh)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.checkpoint.diff",
+        "title": "%dsh.cmd.checkpointDiff.title%",
+        "icon": "$(diff)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.checkpoint.restore",
+        "title": "%dsh.cmd.checkpointRestore.title%",
+        "icon": "$(history)",
+        "category": "DSH"
       }
     ],
     "keybindings": [
@@ -261,6 +287,12 @@
       "command": "dsh.change.prev",
       "key": "shift+f8",
       "when": "editorTextFocus && dsh.hasFileChanges"
+    }
+  ],
+  "viewsWelcome": [
+    {
+      "view": "dsh.checkpoints",
+      "contents": "%dsh.welcome.checkpoints%"
     }
   ],
   "menus": {
@@ -295,6 +327,16 @@
           "group": "1_dsh@2"
         },
         {
+          "command": "dsh.checkpoint.diff",
+          "when": "view == dsh.checkpoints && viewItem == dsh.checkpointFile",
+          "group": "inline"
+        },
+        {
+          "command": "dsh.checkpoint.restore",
+          "when": "view == dsh.checkpoints && viewItem == dsh.checkpoint",
+          "group": "1_dsh@1"
+        },
+        {
           "command": "dsh.session.keepAll",
           "when": "view == dsh.changes && viewItem == dsh.session",
           "group": "1_dsh@1"
@@ -319,6 +361,11 @@
         {
           "command": "dsh.changes.refresh",
           "when": "view == dsh.changes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dsh.checkpoints.refresh",
+          "when": "view == dsh.checkpoints",
           "group": "navigation@1"
         },
         {

@@ -17,7 +17,7 @@ export type BridgeUplinkEvent =
   | { name: 'approvalRequest'; sessionId: string; approvalId: string; toolName: string; callId?: string; reason?: string }
   | { name: 'questionRequest'; sessionId: string; questionId: string; questions: unknown[] }
   | { name: 'changesSync'; sessionId: string; records: unknown[] }
-  | { name: 'checkpointsReady'; ok: boolean; sessionId?: string; error?: string };
+  | { name: 'checkpointsReady'; event: import('../panel/html').CheckpointsReadyMsg };
 
 /** 桥接消息处理依赖（生产接 vscode API，测试注入假实现） */
 export interface BridgeMessageDeps {
@@ -255,12 +255,10 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
     return;
   }
   if (msg.type === 'bridgeCheckpointsReady') {
-    deps.logBridgeEvent?.({
-      name: 'checkpointsReady',
-      ok: msg.ok,
-      sessionId: msg.sessionId,
-      error: msg.error,
-    });
+    // F9：预览/恢复回执整包交给落点（形状见 panel/html.ts 的 CheckpointsReadyMsg）
+    const { type: _type, ...event } = msg;
+    void _type;
+    deps.logBridgeEvent?.({ name: 'checkpointsReady', event });
     return;
   }
 }

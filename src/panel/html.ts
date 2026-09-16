@@ -26,7 +26,7 @@ export type PanelMessage =
   | { type: 'bridgeApprovalRequest'; sessionId: string; approvalId: string; toolName: string; callId?: string; reason?: string }
   | { type: 'bridgeQuestionRequest'; sessionId: string; questionId: string; questions: unknown[] }
   | { type: 'bridgeChangesSync'; sessionId: string; records: unknown[] }
-  | { type: 'bridgeCheckpointsReady'; ok: boolean; sessionId?: string; error?: string };
+  | ({ type: 'bridgeCheckpointsReady' } & CheckpointsReadyMsg);
 
 /**
  * F7 会话状态（插件上报的 agent 运行态）。
@@ -41,6 +41,29 @@ export interface SessionStateMsg {
 }
 
 /**
+ * F9 检查点回执（预览 / 恢复两相共用）。
+ * 单独导出形状的原因与 SessionStateMsg 相同：消息与状态机输入共用同一类型。
+ */
+export interface CheckpointsReadyMsg {
+  readonly phase: 'preview' | 'apply'
+  readonly ok: boolean
+  /** 扩展侧请求 id（配对请求与回执） */
+  readonly requestId?: string
+  readonly sessionId?: string
+  readonly error?: string
+  readonly code?: string
+  readonly turn?: number
+  readonly totalChanges?: number
+  readonly changes?: readonly { readonly path: string; readonly kind: string }[]
+  readonly truncated?: boolean
+  readonly restoreBlocked?: boolean
+  readonly headChanged?: boolean
+  readonly operationChanged?: boolean
+  readonly planId?: string
+  readonly confirmation?: string
+}
+
+/**
  * 扩展 → 页面（下行）消息类型（bridge 0.4.0）。
  * 由 provider.postToPage 投递到顶层 webview，握手脚本按 type 翻译成桥接 kind 转给 iframe，
  * 桥接再校验并加 `dsh-file-jump:` 前缀交给插件。T0 定义形状，调用方在 F6/F8/F11 接入。
@@ -50,7 +73,19 @@ export type PanelDownlink =
   | { type: 'bridgeQuickEditSubmit'; path: string; startLine: number; endLine: number; instruction: string }
   | { type: 'bridgeApprovalDecision'; sessionId: string; approvalId: string; outcome: 'allowed-once' | 'rejected' }
   | { type: 'bridgeQuestionAnswer'; sessionId: string; questionId: string; answer: unknown }
-  | { type: 'bridgeRequestChanges'; sessionId: string };
+  | { type: 'bridgeRequestChanges'; sessionId: string }
+  // F9：检查点预览 / 恢复（两相共用；apply 需带 preview 拿到的 planId + confirmation）
+  | {
+      type: 'bridgeCheckpointRestore'
+      phase: 'preview' | 'apply'
+      sessionId: string
+      messageSeq: number
+      checkpointId: string
+      mode: 'code' | 'both'
+      requestId: string
+      planId?: string
+      confirmation?: string
+    };
 
 /** 渲染上下文 */
 export interface PageCtx {
@@ -170,6 +205,20 @@ if (iframeEl) {
       }, iframeSrc);
       return;
     }
+    if (d && d.type === 'bridgeCheckpointRestore' && typeof d.sessionId === 'string' && typeof d.checkpointId === 'string') {
+      iframeEl.contentWindow.postMessage({
+        kind: 'checkpointRestore',
+        phase: d.phase,
+        sessionId: d.sessionId,
+        messageSeq: d.messageSeq,
+        checkpointId: d.checkpointId,
+        mode: d.mode,
+        requestId: d.requestId,
+        planId: d.planId,
+        confirmation: d.confirmation,
+      }, iframeSrc);
+      return;
+    }
     if (d && d.type === 'bridgeRequestChanges' && typeof d.sessionId === 'string') {
       iframeEl.contentWindow.postMessage({ kind: 'requestChanges', sessionId: d.sessionId }, iframeSrc);
       return;
@@ -263,12 +312,24 @@ if (iframeEl) {
       });
       return;
     }
-    if (d && d.kind === 'checkpointsReady' && typeof d.ok === 'boolean') {
+    if (d && d.kind === 'checkpointsReady' && typeof d.ok === 'boolean' && (d.phase === 'preview' || d.phase === 'apply')) {
       vscode.postMessage({
         type: 'bridgeCheckpointsReady',
+        phase: d.phase,
         ok: d.ok,
+        requestId: typeof d.requestId === 'string' ? d.requestId : undefined,
         sessionId: typeof d.sessionId === 'string' ? d.sessionId : undefined,
         error: typeof d.error === 'string' ? d.error : undefined,
+        code: typeof d.code === 'string' ? d.code : undefined,
+        turn: typeof d.turn === 'number' ? d.turn : undefined,
+        totalChanges: typeof d.totalChanges === 'number' ? d.totalChanges : undefined,
+        changes: Array.isArray(d.changes) ? d.changes : undefined,
+        truncated: typeof d.truncated === 'boolean' ? d.truncated : undefined,
+        restoreBlocked: typeof d.restoreBlocked === 'boolean' ? d.restoreBlocked : undefined,
+        headChanged: typeof d.headChanged === 'boolean' ? d.headChanged : undefined,
+        operationChanged: typeof d.operationChanged === 'boolean' ? d.operationChanged : undefined,
+        planId: typeof d.planId === 'string' ? d.planId : undefined,
+        confirmation: typeof d.confirmation === 'string' ? d.confirmation : undefined,
       });
       return;
     }

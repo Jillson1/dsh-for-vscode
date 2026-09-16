@@ -44,5 +44,10 @@
   "dsh.cmd.sessionKeepAll.title": "保留本会话全部修改",
   "dsh.cmd.sessionRevertAll.title": "丢弃本会话全部修改",
   "dsh.cmd.diffKeepAll.title": "DSH: 保留当前文件全部修改",
-  "dsh.config.notifyOnTurnComplete": "DSH 每一轮结束时弹通知（仅当本轮确实改动了文件时才提示）。"
+  "dsh.config.notifyOnTurnComplete": "DSH 每一轮结束时弹通知（仅当本轮确实改动了文件时才提示）。",
+  "dsh.view.checkpoints.name": "DSH 检查点",
+  "dsh.welcome.checkpoints": "当前工作区没有检查点。\n\n检查点由 DSH 的 change-ledger（turn-rewind 插件）写入，且只支持常规 git 工作区；DSH 跑过一轮后这里就会出现。",
+  "dsh.cmd.checkpointsRefresh.title": "刷新检查点",
+  "dsh.cmd.checkpointDiff.title": "对比该轮之前",
+  "dsh.cmd.checkpointRestore.title": "恢复到该轮之前（只回滚代码）"
 }

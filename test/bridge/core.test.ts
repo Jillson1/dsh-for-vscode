@@ -310,19 +310,36 @@ test('buildChangesSyncMessage 仅 path 或仅 absPath 时互相兜底', () => {
   assert.equal(onlyAbs.records[0].path, 'D:/a.ts');
 });
 
-test('buildCheckpointsReadyMessage 要求 ok 为布尔', () => {
-  assert.deepEqual(buildCheckpointsReadyMessage({ ok: true, sessionId: 's1' }), {
+test('buildCheckpointsReadyMessage：phase + ok 必填，预览字段白名单透传', () => {
+  assert.deepEqual(buildCheckpointsReadyMessage({ phase: 'preview', ok: true, sessionId: 's1' }), {
     kind: 'checkpointsReady',
+    phase: 'preview',
     ok: true,
     sessionId: 's1',
   });
-  assert.deepEqual(buildCheckpointsReadyMessage({ ok: false, error: 'WORKSPACE_IN_USE' }), {
+  assert.deepEqual(buildCheckpointsReadyMessage({ phase: 'apply', ok: false, error: 'WORKSPACE_IN_USE', code: 'WORKSPACE_IN_USE' }), {
     kind: 'checkpointsReady',
+    phase: 'apply',
     ok: false,
     error: 'WORKSPACE_IN_USE',
+    code: 'WORKSPACE_IN_USE',
   });
+  // 缺 phase / 非法 phase / ok 非布尔 → null（无法判定的回执没有意义）
   assert.equal(buildCheckpointsReadyMessage({ sessionId: 's1' }), null);
-  assert.equal(buildCheckpointsReadyMessage({ ok: 'yes' }), null);
+  assert.equal(buildCheckpointsReadyMessage({ phase: 'x', ok: true }), null);
+  assert.equal(buildCheckpointsReadyMessage({ phase: 'preview', ok: 'yes' }), null);
+  // 预览概览：changes 白名单 + 超限截断标记
+  const preview = buildCheckpointsReadyMessage({
+    phase: 'preview',
+    ok: true,
+    requestId: 'cp-1',
+    turn: 3,
+    totalChanges: 300,
+    changes: [...Array(250)].map((_, i) => ({ path: `f${i}.ts`, kind: 'modified' })),
+  });
+  assert.equal(preview?.requestId, 'cp-1');
+  assert.equal(preview?.changes?.length, 200);
+  assert.equal(preview?.truncated, true);
 });
 
 test('buildBridgeUplinkMessage 只放行白名单 kind', () => {
@@ -334,7 +351,10 @@ test('buildBridgeUplinkMessage 只放行白名单 kind', () => {
     pending: 0,
     turn: 0,
   });
-  assert.equal(buildBridgeUplinkMessage({ kind: 'checkpointsReady', payload: { ok: true } })?.kind, 'checkpointsReady');
+  assert.equal(
+    buildBridgeUplinkMessage({ kind: 'checkpointsReady', payload: { phase: 'preview', ok: true } })?.kind,
+    'checkpointsReady',
+  );
   // 白名单外 / 形状非法 → null（静默丢弃，不抛）
   assert.equal(buildBridgeUplinkMessage({ kind: 'diffApplied', payload: { path: 'a.ts' } }), null);
   assert.equal(buildBridgeUplinkMessage({ kind: 'unknownKind', payload: {} }), null);

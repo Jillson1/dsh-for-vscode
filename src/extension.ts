@@ -41,6 +41,14 @@ import {
   type BatchTarget,
 } from './changes/batch';
 import { ChangeCodeLensProvider } from './changes/change-code-lens';
+import { CheckpointStore, ledgerRoot, type CheckpointFs } from './checkpoints/checkpoint-store';
+import { CheckpointTreeProvider, type CheckpointTreeNode } from './checkpoints/checkpoint-tree';
+import {
+  CheckpointContentProvider,
+  registerCheckpointContent,
+  showCheckpointDiff,
+} from './checkpoints/checkpoint-content';
+import type { CheckpointsReadyMsg } from './panel/html';
 import { revealLineInEditor } from './editorReveal';
 
 let manager: ServiceManager | null = null;
@@ -334,6 +342,17 @@ export function activate(context: vscode.ExtensionContext): void {
         turn: typeof event.turn === 'number' ? event.turn : 0,
         pending: typeof event.pending === 'number' ? event.pending : 0,
       });
+      return;
+    }
+    if (event.name === 'checkpointsReady') {
+      const result = event.event as CheckpointsReadyMsg;
+      const resolve = result.requestId === undefined ? undefined : pendingCheckpoints.get(result.requestId);
+      if (resolve !== undefined && result.requestId !== undefined) {
+        pendingCheckpoints.delete(result.requestId);
+        resolve(result);
+      } else {
+        appendLog('[checkpoint] 收到无对应请求的回执（已忽略）');
+      }
       return;
     }
     if (event.name === 'questionRequest') {
@@ -663,6 +682,176 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.commands.executeCommand('setContext', 'dsh.hasFileChanges', has);
   }
 
+  // F9：DSH 检查点（只读 change-ledger；恢复走同源 /turn-rewind）
+  const checkpointFs: CheckpointFs = {
+    readdir: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      try {
+        return await fs.readdir(p);
+      } catch {
+        return []; // 目录不存在 = 账本还没建立，不是错误
+      }
+    },
+    readFile: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      return fs.readFile(p, 'utf8');
+    },
+    mtimeMs: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      try {
+        return (await fs.stat(p)).mtimeMs;
+      } catch {
+        return undefined;
+      }
+    },
+  };
+  const checkpointStore = new CheckpointStore({
+    root: ledgerRoot(process.env.DSH_HOME ?? join(homedir(), '.dsh')),
+    fs: checkpointFs,
+    log: (m) => appendLog(`[checkpoint] ${m}`),
+  });
+  const checkpointContent = new CheckpointContentProvider(checkpointStore);
+  const checkpointsTree = new CheckpointTreeProvider({
+    store: checkpointStore,
+    workspaceRoot: workspaceRootGetter,
+    readFileText: async (p) => {
+      const { promises: fs } = await import('node:fs');
+      return fs.readFile(p, 'utf8');
+    },
+    log: (m) => appendLog(`[checkpoint] ${m}`),
+  });
+  const checkpointsView = vscode.window.createTreeView('dsh.checkpoints', {
+    treeDataProvider: checkpointsTree,
+    showCollapseAll: true,
+  });
+
+  // 预览 / 应用是跨进程一问一答：用 requestId 配对，超时即失败（破坏性动作不自动重试）
+  const pendingCheckpoints = new Map<string, (result: CheckpointsReadyMsg) => void>();
+  let checkpointSeq = 0;
+
+  async function checkpointCall(
+    phase: 'preview' | 'apply',
+    params: {
+      sessionId: string;
+      messageSeq: number;
+      checkpointId: string;
+      mode: 'code' | 'both';
+      planId?: string;
+      confirmation?: string;
+    },
+    timeoutMs = 20000,
+  ): Promise<CheckpointsReadyMsg | null> {
+    checkpointSeq += 1;
+    const requestId = `cp-${checkpointSeq}`;
+    const wait = new Promise<CheckpointsReadyMsg | null>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingCheckpoints.delete(requestId);
+        appendLog(`[checkpoint] ${phase} 超时未收到回执（requestId=${requestId}）`);
+        resolve(null);
+      }, timeoutMs);
+      pendingCheckpoints.set(requestId, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+    });
+    const message = { type: 'bridgeCheckpointRestore' as const, phase, requestId, ...params };
+    const sent = panelPrimary.postToPage(message) || panelSecondary.postToPage(message);
+    if (!sent) {
+      pendingCheckpoints.delete(requestId);
+      void vscode.window.showWarningMessage('DSH 面板当前不可见，无法执行恢复；请先打开 DSH 面板');
+      return null;
+    }
+    return wait;
+  }
+
+  /** 对比：检查点快照 ↔ 当前文件（原生 diff） */
+  async function diffCheckpoint(node: CheckpointTreeNode): Promise<void> {
+    if (node.kind !== 'drift') return;
+    if (node.drift.blob === undefined) {
+      void vscode.window.showWarningMessage('该条目没有内容快照（可能是目录或特殊文件），无法对比');
+      return;
+    }
+    await showCheckpointDiff(
+      checkpointContent,
+      node.checkpoint,
+      node.workspaceHash,
+      node.drift.path,
+      node.absPath,
+      node.drift.blob,
+    );
+  }
+
+  /**
+   * 恢复此轮（两步：先预览拿 planId/confirmation，再确认后应用）。
+   *
+   * 为什么必须两步：引擎拒绝"没先给过计划"的恢复（POST 无 planId 会以 NO_CHANGES 拒绝）——
+   * 也就是"先看得到要改什么"是引擎强制的，扩展只是顺着它走并补一次模态确认。
+   */
+  async function restoreCheckpoint(node: CheckpointTreeNode): Promise<void> {
+    if (node.kind !== 'checkpoint') return;
+    const cp = node.checkpoint;
+    if (cp.sessionId === undefined || cp.turnStartSeq === undefined) {
+      void vscode.window.showWarningMessage('该检查点没有记录会话/轮次起点，无法恢复（可用 diff 查看内容）');
+      return;
+    }
+    const preview = await checkpointCall('preview', {
+      sessionId: cp.sessionId,
+      messageSeq: cp.turnStartSeq,
+      checkpointId: cp.id,
+      mode: 'code',
+    });
+    if (preview === null) return;
+    if (!preview.ok) {
+      appendLog(`[checkpoint] 预览失败 code=${preview.code ?? '-'} error=${preview.error ?? '-'}`);
+      void vscode.window.showWarningMessage(
+        `无法恢复：${preview.error ?? '未知原因'}${preview.code === undefined ? '' : `（${preview.code}）`}`,
+      );
+      return;
+    }
+    if (preview.restoreBlocked === true) {
+      void vscode.window.showWarningMessage('该工作区有其他活跃会话在用同一份文件，暂不能恢复；请先关闭那些会话');
+      return;
+    }
+    if (preview.planId === undefined || preview.confirmation === undefined) {
+      void vscode.window.showWarningMessage('该轮没有需要恢复的项目文件（引擎未给出恢复计划）');
+      return;
+    }
+    const count = preview.totalChanges ?? 0;
+    const listed = preview.changes ?? [];
+    const sample = listed.slice(0, 8).map((c) => `  · ${c.path}（${c.kind}）`).join('\n');
+    const more = listed.length > 8 ? `\n  … 另有 ${listed.length - 8} 个` : '';
+    const CONFIRM = '恢复本轮之前的代码';
+    const choice = await vscode.window.showWarningMessage(
+      `将把 ${count} 个文件恢复到该轮开始之前（只回滚代码，不动会话）：
+${sample}${more}`,
+      { modal: true },
+      CONFIRM,
+    );
+    if (choice !== CONFIRM) {
+      appendLog('[checkpoint] 用户取消恢复');
+      return;
+    }
+    const applied = await checkpointCall('apply', {
+      sessionId: cp.sessionId,
+      messageSeq: cp.turnStartSeq,
+      checkpointId: cp.id,
+      mode: 'code',
+      planId: preview.planId,
+      confirmation: preview.confirmation,
+    });
+    if (applied === null) return;
+    if (!applied.ok) {
+      appendLog(`[checkpoint] 恢复失败 code=${applied.code ?? '-'} error=${applied.error ?? '-'}`);
+      void vscode.window.showWarningMessage(
+        `恢复失败：${applied.error ?? '未知原因'}${applied.code === undefined ? '' : `（${applied.code}）`}`,
+      );
+      return;
+    }
+    appendLog(`[checkpoint] 恢复完成 checkpoint=${cp.id}`);
+    void vscode.window.showInformationMessage(`已恢复 ${count} 个文件到该轮之前`);
+    checkpointsTree.refresh();
+  }
+
   const panelPrimary = new DshPanelProvider(
     manager,
     () => {
@@ -781,6 +970,18 @@ export function activate(context: vscode.ExtensionContext): void {
     // F5：CodeLens provider 与其生命周期
     vscode.languages.registerCodeLensProvider({ scheme: 'file' }, changeLenses),
     changeLenses,
+    // —— F9 检查点：视图 / 内容提供者 / 命令 ——
+    checkpointsView,
+    checkpointsTree,
+    registerCheckpointContent(checkpointContent),
+    checkpointContent,
+    vscode.commands.registerCommand('dsh.checkpoints.refresh', () => checkpointsTree.refresh()),
+    vscode.commands.registerCommand('dsh.checkpoint.diff', (node?: CheckpointTreeNode) =>
+      node === undefined ? undefined : void diffCheckpoint(node),
+    ),
+    vscode.commands.registerCommand('dsh.checkpoint.restore', (node?: CheckpointTreeNode) =>
+      node === undefined ? undefined : void restoreCheckpoint(node),
+    ),
     changesView,
     changeCounter,
     changesTree,

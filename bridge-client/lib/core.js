@@ -214,6 +214,9 @@ export const BRIDGE_CAPABILITIES = [
   'sessionState', // F7 会话状态（运行中/待决数）
 ];
 
+/** 检查点回执里最多透传的变更条数（一次恢复可能涉及上千文件，扩展侧弹窗只需要概览） */
+export const CHECKPOINT_CHANGE_LIMIT = 200;
+
 /** 上行消息投递事件名（插件 dispatch、桥接监听；两侧必须一致） */
 export const UPLINK_EVENT = 'dsh-file-jump:bridgeUp';
 
@@ -312,14 +315,42 @@ export function buildChangesSyncMessage(p) {
 }
 
 /**
- * 构造"检查点就绪/恢复回执"消息（F9：恢复完成后回执给扩展）。
- * ok 必须是布尔（缺了就无法判定成败）→ 返回 null。
+ * 构造"检查点回执"消息（F9）：插件完成 `/turn-rewind` 的预览或恢复后回执给扩展。
+ *
+ * 两个 phase 共用一条 kind（而不是拆成两条消息）的理由：它们本就是同一次交互的两步，
+ * 拆开会让"扩展等待哪一条"变成新的状态；用 phase 区分，扩展侧一个 case 就能处理。
+ *
+ * @param {object} p { phase, ok, sessionId?, error?, turn?, totalChanges?, changes?, truncated?,
+ *                     restoreBlocked?, planId?, confirmation?, headChanged?, operationChanged? }
+ * @returns {null | object} phase/ok 非法即 null（无法判定的回执没有意义）
  */
 export function buildCheckpointsReadyMessage(p) {
-  if (!p || typeof p !== 'object' || typeof p.ok !== 'boolean') return null;
-  const msg = { kind: 'checkpointsReady', ok: p.ok };
+  if (!p || typeof p !== 'object') return null;
+  if (p.phase !== 'preview' && p.phase !== 'apply') return null;
+  if (typeof p.ok !== 'boolean') return null;
+  const msg = { kind: 'checkpointsReady', phase: p.phase, ok: p.ok };
+  // requestId：扩展侧一次预览/应用可能有多个在飞，回执必须能配对（缺了就只能靠时序猜）
+  if (isNonEmptyString(p.requestId)) msg.requestId = p.requestId;
   if (isNonEmptyString(p.sessionId)) msg.sessionId = p.sessionId;
   if (isNonEmptyString(p.error)) msg.error = p.error;
+  if (isNonEmptyString(p.code)) msg.code = p.code;
+  if (Number.isFinite(p.turn)) msg.turn = p.turn;
+  if (Number.isFinite(p.totalChanges)) msg.totalChanges = p.totalChanges;
+  if (typeof p.truncated === 'boolean') msg.truncated = p.truncated;
+  if (typeof p.restoreBlocked === 'boolean') msg.restoreBlocked = p.restoreBlocked;
+  if (typeof p.headChanged === 'boolean') msg.headChanged = p.headChanged;
+  if (typeof p.operationChanged === 'boolean') msg.operationChanged = p.operationChanged;
+  if (isNonEmptyString(p.planId)) msg.planId = p.planId;
+  if (isNonEmptyString(p.confirmation)) msg.confirmation = p.confirmation;
+  // changes 只透传 {path, kind} 白名单（可能上千条，按 MAX 截断并标记）
+  if (Array.isArray(p.changes)) {
+    const changes = p.changes
+      .filter((c) => c && typeof c === 'object' && typeof c.path === 'string' && c.path !== '')
+      .slice(0, CHECKPOINT_CHANGE_LIMIT)
+      .map((c) => ({ path: c.path, kind: typeof c.kind === 'string' ? c.kind : 'modified' }));
+    if (changes.length > 0) msg.changes = changes;
+    if (p.changes.length > changes.length) msg.truncated = true;
+  }
   return msg;
 }
 
@@ -390,6 +421,33 @@ export function parseRequestChanges(d) {
   return { kind: 'requestChanges', sessionId: d.sessionId };
 }
 
+/**
+ * 校验下行"检查点预览 / 恢复"（F9）。
+ *
+ * 为什么在两处都带 phase：扩展点「恢复此轮」时必须先拿预览（GET 才会给出 planId/confirmation），
+ * 再带 planId+confirmation 请求应用——两步都由这条消息承载，插件侧只需看 phase。
+ * mode：'code' = 只回滚代码；'both' = 代码 + 会话一起回退（默认由扩展侧选 'code'）。
+ */
+export function parseCheckpointRestore(d) {
+  if (!d || typeof d !== 'object' || d.kind !== 'checkpointRestore') return null;
+  if (d.phase !== 'preview' && d.phase !== 'apply') return null;
+  if (!isNonEmptyString(d.sessionId)) return null;
+  if (!Number.isFinite(d.messageSeq)) return null;
+  if (!isNonEmptyString(d.checkpointId)) return null;
+  const msg = {
+    kind: 'checkpointRestore',
+    phase: d.phase,
+    sessionId: d.sessionId,
+    messageSeq: d.messageSeq,
+    checkpointId: d.checkpointId,
+    mode: d.mode === 'both' ? 'both' : 'code',
+    requestId: isNonEmptyString(d.requestId) ? d.requestId : '',
+  };
+  if (isNonEmptyString(d.planId)) msg.planId = d.planId;
+  if (isNonEmptyString(d.confirmation)) msg.confirmation = d.confirmation;
+  return msg;
+}
+
 /** 校验下行"注入 composer"（Add to DSH 既有通道，纳入统一下行分发） */
 export function parseInjectComposer(d) {
   if (!d || typeof d !== 'object' || d.kind !== 'injectComposer') return null;
@@ -408,6 +466,8 @@ export function parseDownlinkMessage(d) {
   switch (d.kind) {
     case 'injectComposer':
       return parseInjectComposer(d);
+    case 'checkpointRestore':
+      return parseCheckpointRestore(d);
     case 'quickEditSubmit':
       return parseQuickEditSubmit(d);
     case 'approvalDecision':

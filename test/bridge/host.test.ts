@@ -392,11 +392,11 @@ test('handleBridgeMessage questionRequest / changesSync / checkpointsReady 落�
   const deps = logOnlyDeps(events);
   await handleBridgeMessage({ type: 'bridgeQuestionRequest', sessionId: 's1', questionId: 'q1', questions: [{ id: 'x' }] }, deps);
   await handleBridgeMessage({ type: 'bridgeChangesSync', sessionId: 's1', records: [{ callId: 'c1' }] }, deps);
-  await handleBridgeMessage({ type: 'bridgeCheckpointsReady', ok: true, sessionId: 's1' }, deps);
+  await handleBridgeMessage({ type: 'bridgeCheckpointsReady', phase: 'preview', ok: true, sessionId: 's1' }, deps);
   assert.equal(events.length, 3);
   assert.deepEqual(events[0], { name: 'questionRequest', sessionId: 's1', questionId: 'q1', questions: [{ id: 'x' }] });
   assert.deepEqual(events[1], { name: 'changesSync', sessionId: 's1', records: [{ callId: 'c1' }] });
-  assert.deepEqual(events[2], { name: 'checkpointsReady', ok: true, sessionId: 's1', error: undefined });
+  assert.deepEqual(events[2], { name: 'checkpointsReady', event: { phase: 'preview', ok: true, sessionId: 's1' } });
 });
 
 test('未注入 logBridgeEvent 时新上行消息静默忽略（降级不抛）', async () => {
@@ -413,6 +413,6 @@ test('未注入 logBridgeEvent 时新上行消息静默忽略（降级不抛）'
   await handleBridgeMessage({ type: 'bridgeApprovalRequest', sessionId: 's1', approvalId: 'a1', toolName: 'bash' }, deps);
   await handleBridgeMessage({ type: 'bridgeQuestionRequest', sessionId: 's1', questionId: 'q1', questions: [] }, deps);
   await handleBridgeMessage({ type: 'bridgeChangesSync', sessionId: 's1', records: [] }, deps);
-  await handleBridgeMessage({ type: 'bridgeCheckpointsReady', ok: false }, deps);
+  await handleBridgeMessage({ type: 'bridgeCheckpointsReady', phase: 'apply', ok: false }, deps);
   assert.deepEqual(warnings, []);
 });
