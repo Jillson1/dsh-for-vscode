@@ -61,6 +61,12 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeNo
   readonly onDidChangeTreeData = this.emitter.event
   /** 本次构建的缓存（账本变更时失效） */
   private cached: SessionNodeView[] | undefined
+  /**
+   * 批量处置的失败留痕：callId → 原因。
+   * 方案 §7.4 要求"失败条目保留在树里并标红"——失败后记录仍在账本里（账本只在成功时移除），
+   * 这里补的是**视觉留痕**：用户下一次看树时知道哪几条没成、为什么。
+   */
+  private readonly failed = new Map<string, string>()
   private readonly subscription: { dispose(): void }
 
   constructor(private readonly deps: ChangesTreeDeps) {
@@ -72,6 +78,30 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeNo
   refresh(): void {
     this.cached = undefined
     this.emitter.fire(undefined)
+  }
+
+  /**
+   * 记录批量处置的失败条目（标红 + 原因），并立即重绘。
+   * 每次批量开始前调用 `clearFailed()`；成功移除的记录在下次构建时被自动剪枝。
+   */
+  markFailed(entries: readonly { callId: string; reason: string }[]): void {
+    for (const e of entries) this.failed.set(e.callId, e.reason)
+    this.refresh()
+  }
+
+  /** 清空失败留痕（新一轮批量开始时调用） */
+  clearFailed(): void {
+    if (this.failed.size === 0) return
+    this.failed.clear()
+    this.refresh()
+  }
+
+  /** 带失败留痕的变更节点图标（红色警告；否则按变更性质） */
+  private changeIcon(node: Extract<ChangeTreeNode, { kind: 'change' }>): vscode.ThemeIcon | { light: vscode.Uri; dark: vscode.Uri } {
+    if (this.failed.has(node.view.callId)) {
+      return new vscode.ThemeIcon('warning', new vscode.ThemeColor('errorForeground'))
+    }
+    return iconFor(node.view.nature)
   }
 
   dispose(): void {
@@ -138,8 +168,11 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeNo
     item.id = `change:${node.sessionId}:${node.view.callId}`
     item.description = node.view.description
     item.contextValue = 'dsh.change'
-    item.iconPath = iconFor(node.view.nature)
-    item.tooltip = `${node.view.label} · ${node.view.description}`
+    item.iconPath = this.changeIcon(node)
+    const failure = this.failed.get(node.view.callId)
+    if (failure !== undefined) item.description = `${node.view.description} · 未能丢弃：${failure}`
+    item.tooltip = `${node.view.label} · ${node.view.description}${failure === undefined ? '' : `
+未能丢弃：${failure}`}`
     // 点击 = 打开并定位（与 hover 的「丢弃/保留」互补：树负责"过一遍"，hover 负责"就地处置"）
     item.command = { command: 'dsh.change.open', title: '打开并定位', arguments: [node] }
     return item
@@ -150,6 +183,16 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeNo
     if (this.cached !== undefined) return this.cached
     const hashes = await this.currentHashes()
     this.cached = buildTree(this.deps.book, hashes)
+    // 剪枝：记录已被保留/成功丢弃的失败留痕不再有意义（否则会长期占据红色标记）
+    if (this.failed.size > 0) {
+      const alive = new Set<string>()
+      for (const session of this.cached) {
+        for (const file of session.files) for (const c of file.changes) alive.add(c.callId)
+      }
+      for (const callId of [...this.failed.keys()]) {
+        if (!alive.has(callId)) this.failed.delete(callId)
+      }
+    }
     return this.cached
   }
 

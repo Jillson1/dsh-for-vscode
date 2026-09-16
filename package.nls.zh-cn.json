@@ -40,5 +40,8 @@
   "dsh.cmd.changeRevert.title": "丢弃这处修改",
   "dsh.cmd.fileKeepAll.title": "保留本文件全部修改",
   "dsh.cmd.fileRevertAll.title": "丢弃本文件全部修改",
-  "dsh.cmd.changesRefresh.title": "刷新变更列表"
+  "dsh.cmd.changesRefresh.title": "刷新变更列表",
+  "dsh.cmd.sessionKeepAll.title": "保留本会话全部修改",
+  "dsh.cmd.sessionRevertAll.title": "丢弃本会话全部修改",
+  "dsh.cmd.diffKeepAll.title": "DSH: 保留当前文件全部修改"
 }

@@ -40,5 +40,8 @@
   "dsh.cmd.changeRevert.title": "Discard Change",
   "dsh.cmd.fileKeepAll.title": "Keep All Changes in File",
   "dsh.cmd.fileRevertAll.title": "Discard All Changes in File",
-  "dsh.cmd.changesRefresh.title": "Refresh Change List"
+  "dsh.cmd.changesRefresh.title": "Refresh Change List",
+  "dsh.cmd.sessionKeepAll.title": "Keep All Changes in Session",
+  "dsh.cmd.sessionRevertAll.title": "Discard All Changes in Session",
+  "dsh.cmd.diffKeepAll.title": "DSH: Keep All Modifications in File"
 }

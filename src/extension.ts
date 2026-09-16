@@ -24,6 +24,14 @@ import { locateNewText } from './bridge/diff-tracker';
 import { ChangeBook, type RevertOutcome } from './bridge/change-book';
 import { ChangeNavigator } from './changes/change-navigation';
 import { ChangesTreeProvider, type ChangeTreeNode } from './changes/changes-tree';
+import {
+  normalizeNodes,
+  summarizeKept,
+  summarizeOutcomes,
+  targetsFromNodes,
+  type BatchTarget,
+} from './changes/batch';
+import { ChangeCodeLensProvider } from './changes/change-code-lens';
 import { revealLineInEditor } from './editorReveal';
 
 let manager: ServiceManager | null = null;
@@ -407,6 +415,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const changesView = vscode.window.createTreeView('dsh.changes', {
     treeDataProvider: changesTree,
     showCollapseAll: true,
+    // F4：批量处置要能"框选一片"再右键（命令回落到 treeView.selection，见 normalizeNodes）
+    canSelectMany: true,
+  });
+
+  // F5：变更行内 CodeLens（保留 / 丢弃 / 对比）——数据源同为账本，账本一变即重算
+  const changeLenses = new ChangeCodeLensProvider({
+    book: changeBook,
+    log: (m) => appendLog(`[lens] ${m}`),
   });
 
   /**
@@ -453,27 +469,59 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  /** 保留文件全部（树）：逐条走 keep，保持栈与账本同步 */
-  async function keepAllInFile(node: ChangeTreeNode): Promise<void> {
-    if (node.kind !== 'file') return;
-    let done = 0;
-    for (const c of node.view.changes) {
-      const r = await ds?.keep(c.callId);
-      if (r?.ok === true) done += 1;
+  /**
+   * 批量保留（F4）：逐条走 DiffService.keep —— 它同时清修改栈与账本，不会出现"账本删了、高亮还在"。
+   * 如实报条数：请求 N 条、实际保留 M 条（记录可能已被别处移除）。
+   */
+  async function batchKeep(targets: readonly BatchTarget[]): Promise<void> {
+    changesTree.clearFailed();
+    let requested = 0;
+    let kept = 0;
+    for (const target of targets) {
+      for (const rec of recordsOf(target)) {
+        requested += 1;
+        const r = await ds?.keep(rec.callId);
+        if (r?.ok === true) kept += 1;
+      }
     }
-    appendLog(`[change] keepAll ${node.view.absPath} → ${done}/${node.view.changes.length}`);
+    const text = summarizeKept(requested, kept);
+    appendLog(`[batch] keep → ${text}（目标 ${targets.length} 个）`);
+    void vscode.window.showInformationMessage(text);
   }
 
-  /** 丢弃文件全部（树）：逐条执行、逐条报告（F4 的批量语义，T3 再补会话级） */
-  async function revertAllInFile(node: ChangeTreeNode): Promise<void> {
-    if (node.kind !== 'file') return;
-    const outcomes = await changeBook.revertAll(node.sessionId, node.view.absPath);
-    const ok = outcomes.filter((o) => o.status === 'reverted').length;
-    const failed = outcomes.length - ok;
-    appendLog(`[change] revertAll ${node.view.absPath} → 成功 ${ok} 失败 ${failed}`);
-    if (failed > 0) {
-      void vscode.window.showWarningMessage(`已丢弃 ${ok} 处，${failed} 处未能丢弃（详见 DSH 输出）`);
+  /**
+   * 批量丢弃（F4）：逐条执行、逐条报告；失败条目在树里标红留痕（方案 §7.4）。
+   * 语义要点：**失败的记录留在账本里**（账本只在成功时移除），用户可以看清原因后单独重试。
+   */
+  async function batchRevert(targets: readonly BatchTarget[]): Promise<void> {
+    changesTree.clearFailed();
+    const outcomes: RevertOutcome[] = [];
+    const failures: { callId: string; reason: string }[] = [];
+    for (const target of targets) {
+      for (const rec of recordsOf(target)) {
+        const outcome = await changeBook.revert(target.sessionId, rec.callId);
+        outcomes.push(outcome);
+        if (outcome.status !== 'reverted') failures.push({ callId: rec.callId, reason: outcome.reason });
+      }
     }
+    if (failures.length > 0) changesTree.markFailed(failures);
+    const summary = summarizeOutcomes(outcomes);
+    appendLog(`[batch] revert → ${summary.text}（目标 ${targets.length} 个）`);
+    if (summary.failed > 0) void vscode.window.showWarningMessage(summary.text);
+    else if (summary.ok > 0) void vscode.window.showInformationMessage(summary.text);
+  }
+
+  /** 批量目标 → 账本记录（会话 / 文件 / 单条三种粒度统一取记录；快照式取出，避免边执行边变） */
+  function recordsOf(target: BatchTarget): readonly { callId: string }[] {
+    if (target.scope === 'session') return changeBook.records(target.sessionId);
+    if (target.scope === 'file') return changeBook.records(target.sessionId, target.absPath);
+    const rec = changeBook.get(target.sessionId, target.callId);
+    return rec === undefined ? [] : [rec];
+  }
+
+  /** 解析命令实参 → 批量目标（树右键多选 / 单选 / 命令面板 / 视图标题四种入口，见 normalizeNodes） */
+  function targetsFromArg(arg: unknown): BatchTarget[] {
+    return targetsFromNodes(normalizeNodes(arg, changesView.selection));
   }
 
   /**
@@ -581,12 +629,30 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('dsh.change.revert', (node?: ChangeTreeNode) =>
       node === undefined ? undefined : void revertChange(node),
     ),
-    vscode.commands.registerCommand('dsh.file.keepAll', (node?: ChangeTreeNode) =>
-      node === undefined ? undefined : void keepAllInFile(node),
-    ),
-    vscode.commands.registerCommand('dsh.file.revertAll', (node?: ChangeTreeNode) =>
-      node === undefined ? undefined : void revertAllInFile(node),
-    ),
+    // —— F4 批量处置：三种粒度（会话 / 文件 / 单条），实参归一后走同一套批量逻辑 ——
+    vscode.commands.registerCommand('dsh.file.keepAll', (node?: unknown) => void batchKeep(targetsFromArg(node))),
+    vscode.commands.registerCommand('dsh.file.revertAll', (node?: unknown) => void batchRevert(targetsFromArg(node))),
+    vscode.commands.registerCommand('dsh.session.keepAll', (node?: unknown) => void batchKeep(targetsFromArg(node))),
+    vscode.commands.registerCommand('dsh.session.revertAll', (node?: unknown) => void batchRevert(targetsFromArg(node))),
+    // 编辑器级（命令面板："保留当前文件全部修改"）：按**路径**取记录，跨会话都算——
+    // 与 F2 导航同一口径（用户在意的是"这个文件"，不是"哪个会话碰过它"）
+    vscode.commands.registerCommand('dsh.diff.keepAll', () => {
+      const ed = vscode.window.activeTextEditor;
+      if (ed === undefined) {
+        void vscode.window.showInformationMessage('请先打开一个文件，再执行"保留当前文件全部修改"');
+        return;
+      }
+      const targets: BatchTarget[] = changeBook.recordsForPath(ed.document.uri.fsPath).map((r) => ({
+        scope: 'change',
+        sessionId: r.sessionId,
+        callId: r.callId,
+        absPath: r.absPath,
+      }));
+      void batchKeep(targets);
+    }),
+    // F5：CodeLens provider 与其生命周期
+    vscode.languages.registerCodeLensProvider({ scheme: 'file' }, changeLenses),
+    changeLenses,
     changesView,
     changeCounter,
     changesTree,

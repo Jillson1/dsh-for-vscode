@@ -41,7 +41,10 @@
     "onCommand:dsh.change.revert",
     "onCommand:dsh.file.keepAll",
     "onCommand:dsh.file.revertAll",
-    "onCommand:dsh.changes.refresh"
+    "onCommand:dsh.changes.refresh",
+    "onCommand:dsh.session.keepAll",
+    "onCommand:dsh.session.revertAll",
+    "onCommand:dsh.diff.keepAll"
   ],
   "contributes": {
     "viewsContainers": {
@@ -229,6 +232,23 @@
         "title": "%dsh.cmd.changesRefresh.title%",
         "icon": "$(refresh)",
         "category": "DSH"
+      },
+      {
+        "command": "dsh.session.keepAll",
+        "title": "%dsh.cmd.sessionKeepAll.title%",
+        "icon": "$(check-all)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.session.revertAll",
+        "title": "%dsh.cmd.sessionRevertAll.title%",
+        "icon": "$(discard)",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.diff.keepAll",
+        "title": "%dsh.cmd.diffKeepAll.title%",
+        "category": "DSH"
       }
     ],
     "keybindings": [
@@ -272,6 +292,16 @@
         {
           "command": "dsh.change.revert",
           "when": "view == dsh.changes && viewItem == dsh.change",
+          "group": "1_dsh@2"
+        },
+        {
+          "command": "dsh.session.keepAll",
+          "when": "view == dsh.changes && viewItem == dsh.session",
+          "group": "1_dsh@1"
+        },
+        {
+          "command": "dsh.session.revertAll",
+          "when": "view == dsh.changes && viewItem == dsh.session",
           "group": "1_dsh@2"
         },
         {
