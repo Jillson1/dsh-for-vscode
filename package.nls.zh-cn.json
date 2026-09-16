@@ -29,5 +29,7 @@
   "dsh.cmd.addSelectionToDsh.title": "将选区添加到 DSH",
   "dsh.cmd.diffShow.title": "DSH: 查看修改对比",
   "dsh.cmd.diffRevert.title": "DSH: 撤销最近一处修改",
-  "dsh.cmd.diffRevertAll.title": "DSH: 撤销当前文件全部修改"
+  "dsh.cmd.diffKeep.title": "DSH: 保留最近一处修改",
+  "dsh.cmd.diffRevertAll.title": "DSH: 撤销当前文件全部修改",
+  "dsh.cmd.diffClearMarks.title": "DSH: 清除当前文件标记（保留改动）"
 }

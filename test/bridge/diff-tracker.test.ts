@@ -1,5 +1,6 @@
-// test/bridge/diff-tracker.test.ts — A 组修改跟踪纯逻辑单测
-// 覆盖：路径解析、hunk → 记录转换、oldText/newText 定位、撤销编辑构造、修改栈去重。
+// test/bridge/diff-tracker.test.ts — A/B 组修改跟踪纯逻辑单测
+// 覆盖：路径解析、hunk → 记录转换、oldText/newText 定位、撤销编辑构造、修改栈去重、
+// 行级红绿 diff（diffLines / redGreenLines）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sep, isAbsolute } from 'node:path';
@@ -12,6 +13,16 @@ import {
   buildRevertEdit,
   pathsEqual,
   DiffStack,
+  diffLines,
+  redGreenLines,
+  mergeLineMarks,
+  diffNature,
+  summarizeDiff,
+  deletedLines,
+  addedLines,
+  planDiscard,
+  writtenContentMatches,
+  userAppendedPart,
   type AppliedDiffInput,
   type ModificationRecord,
 } from '../../src/bridge/diff-tracker';
@@ -48,14 +59,17 @@ test('recordsFromDiffs 每个 hunk 转一条记录并回填行数', () => {
   assert.equal(records[1].lineCount, 3); // 跨 3 行
 });
 
-test('recordsFromDiffs 丢弃 oldText 为空的 hunk（write 新建）', () => {
+test('recordsFromDiffs 保留 oldText 为空的 hunk（write 新建，全绿高亮）', () => {
   const input: AppliedDiffInput = {
     path: 'src/a.ts',
     cwd: '/proj',
     diffs: [{ oldText: '', newText: 'hi' }],
     callId: 'c-2',
   };
-  assert.deepEqual(recordsFromDiffs(input, '/proj'), []);
+  const records = recordsFromDiffs(input, '/proj');
+  assert.equal(records.length, 1);
+  assert.equal(records[0].oldText, '');
+  assert.equal(records[0].newText, 'hi');
 });
 
 test('recordsFromDiffs 路径无法解析 → 整条丢弃', () => {
@@ -170,4 +184,383 @@ test('DiffStack forPath 大小写不敏感匹配（插件 path vs VS Code fsPath
   s.push(mk('c-1', 'E:\\proj\\a.ts'));
   // 查询用不同大小写的 fsPath 也应命中
   assert.deepEqual(s.forPath('e:\\proj\\A.ts').map((r) => r.callId), ['c-1']);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B 组：行级红绿 diff（Cursor 风格）
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('diffLines 纯新增：oldText 空 → 全 add', () => {
+  const out = diffLines('', 'a\nb');
+  assert.deepEqual(out, [
+    { type: 'add', newLine: 1 },
+    { type: 'add', newLine: 2 },
+  ]);
+});
+
+test('diffLines 纯删除：newText 空 → 全 del', () => {
+  const out = diffLines('a\nb', '');
+  assert.deepEqual(out, [
+    { type: 'del', oldLine: 1 },
+    { type: 'del', oldLine: 2 },
+  ]);
+});
+
+test('diffLines 单行替换 → del + add', () => {
+  const out = diffLines('x', 'y');
+  assert.deepEqual(out, [
+    { type: 'del', oldLine: 1 },
+    { type: 'add', newLine: 1 },
+  ]);
+});
+
+test('diffLines 多行替换带上下文（首尾相同行保留 ctx）', () => {
+  const out = diffLines('a\nOLD\nb', 'a\nNEW\nb');
+  assert.deepEqual(out, [
+    { type: 'ctx', oldLine: 1, newLine: 1 },
+    { type: 'del', oldLine: 2 },
+    { type: 'add', newLine: 2 },
+    { type: 'ctx', oldLine: 3, newLine: 3 },
+  ]);
+});
+
+test('diffLines 纯插入：NEW 行夹在上下文中间 → add 在中间', () => {
+  const out = diffLines('a\nb', 'a\nNEW\nb');
+  assert.deepEqual(out, [
+    { type: 'ctx', oldLine: 1, newLine: 1 },
+    { type: 'add', newLine: 2 },
+    { type: 'ctx', oldLine: 2, newLine: 3 },
+  ]);
+});
+
+test('redGreenLines 替换场景：del 投影到替换锚点（第一个 new 行）', () => {
+  // newText 起始行 = 5；oldText 'OLD1\nOLD2' 换成 newText 'NEW'：
+  // del 两行都投影到 newText 的第 1 行（文件第 5 行），add 也标在第 5 行
+  const marks = redGreenLines('OLD1\nOLD2', 'NEW', 5);
+  assert.deepEqual(marks, [
+    { line: 5, kind: 'del' },
+    { line: 5, kind: 'add' },
+  ]);
+});
+
+test('redGreenLines 纯新增：全绿精确行', () => {
+  const marks = redGreenLines('', 'a\nb\nc', 3);
+  assert.deepEqual(marks, [
+    { line: 3, kind: 'add' },
+    { line: 4, kind: 'add' },
+    { line: 5, kind: 'add' },
+  ]);
+});
+
+test('redGreenLines 纯删除：投影到 hunk 末尾（newStart+newCount-1）', () => {
+  // newText 为空、起始行 2 → 删除行投影到 max(1, 2+0-1)=1
+  const marks = redGreenLines('a\nb', '', 2);
+  assert.deepEqual(marks, [{ line: 1, kind: 'del' }]);
+});
+
+test('redGreenLines 输出按行号升序且同点去重', () => {
+  const marks = redGreenLines('a\nb', 'c\nd', 10);
+  // del 投影到锚点 10（第一个 add 行），add 标 10、11 → 排序后 del+add 在 10，add 在 11
+  assert.deepEqual(marks, [
+    { line: 10, kind: 'del' },
+    { line: 10, kind: 'add' },
+    { line: 11, kind: 'add' },
+  ]);
+});
+
+test('recordsFromDiffs write 新建（oldText 空串）也保留（全绿高亮）', () => {
+  const input: AppliedDiffInput = {
+    path: 'src/n.ts',
+    cwd: '/proj',
+    diffs: [{ oldText: '', newText: 'hi\nworld' }],
+    callId: 'c-write-1',
+  };
+  const records = recordsFromDiffs(input, '/proj');
+  assert.equal(records.length, 1);
+  assert.equal(records[0].oldText, '');
+  assert.equal(records[0].lineCount, 2); // 按 newText 行数
+});
+
+test('buildRevertEdit edit 纯插入（oldText 空）→ 还原为移除插入内容', () => {
+  const record: ModificationRecord = {
+    callId: 'c-edit-ins',
+    path: '/proj/n.ts',
+    oldText: '',
+    newText: 'inserted',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+    tool: 'edit',
+  };
+  const edit = buildRevertEdit('inserted\n', record);
+  assert.ok(edit !== null);
+  assert.equal(edit.currentText, 'inserted');
+  assert.equal(edit.replacement, ''); // 空串 = 删除该片段
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 丢弃语义：write 新建 → 删除文件；其余 → 文本还原
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('planDiscard write 新建（tool=write + 空 oldText）→ delete-file', () => {
+  const rec: ModificationRecord = {
+    callId: 'c-w',
+    path: '/proj/new.md',
+    oldText: '',
+    newText: 'hi',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+    tool: 'write',
+  };
+  assert.deepEqual(planDiscard(rec), { kind: 'delete-file' });
+});
+
+test('planDiscard write 覆盖（有真实改前片段）→ revert-text', () => {
+  const rec: ModificationRecord = {
+    callId: 'c-w2',
+    path: '/proj/a.ts',
+    oldText: 'old',
+    newText: 'new',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+    tool: 'write',
+  };
+  assert.deepEqual(planDiscard(rec), { kind: 'revert-text' });
+});
+
+test('planDiscard edit（含纯插入）→ revert-text', () => {
+  const base = { callId: 'c-e', path: '/proj/a.ts', line: 1, lineCount: 1, ts: 0, tool: 'edit' };
+  assert.deepEqual(planDiscard({ ...base, oldText: 'x', newText: 'y' }), { kind: 'revert-text' });
+  assert.deepEqual(planDiscard({ ...base, oldText: '', newText: 'y' }), { kind: 'revert-text' });
+});
+
+test('planDiscard 未知工具（tool 缺省）+ 空 oldText → refuse（防文本还原清空文件）', () => {
+  const rec: ModificationRecord = {
+    callId: 'c-u',
+    path: '/proj/a.ts',
+    oldText: '',
+    newText: 'y',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+  };
+  assert.deepEqual(planDiscard(rec), { kind: 'refuse' });
+});
+
+test('planDiscard 未知工具但 oldText 非空 → revert-text（有锚点，安全）', () => {
+  const rec: ModificationRecord = {
+    callId: 'c-u2',
+    path: '/proj/a.ts',
+    oldText: 'x',
+    newText: 'y',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+  };
+  assert.deepEqual(planDiscard(rec), { kind: 'revert-text' });
+});
+
+test('recordsFromDiffs 透传 tool 到记录', () => {
+  const input: AppliedDiffInput = {
+    path: 'src/a.ts',
+    cwd: '/proj',
+    diffs: [{ oldText: 'x', newText: 'y' }],
+    callId: 'c-1',
+    tool: 'edit',
+  };
+  assert.equal(recordsFromDiffs(input, '/proj')[0].tool, 'edit');
+});
+
+test('locateNewText 兼容 CRLF/LF：LF 片段在 CRLF 文件里也能定位', () => {
+  // 磁盘文件 CRLF，DSH 侧片段 LF → 原 indexOf 失败，归一后命中第 3 行
+  const content = 'a\r\nb\r\nconst x = 2\r\nc\r\n';
+  const loc = locateNewText(content, 'const x = 2');
+  assert.ok(loc !== null);
+  assert.equal(loc.line, 3);
+  assert.equal(loc.startOffset, content.indexOf('const x = 2'));
+});
+
+test('locateNewText 兼容 CRLF/LF：多行片段换行差异', () => {
+  const content = 'l1\r\nl2\r\nl3\r\n';
+  const loc = locateNewText(content, 'l1\nl2\nl3');
+  assert.ok(loc !== null);
+  assert.equal(loc.line, 1);
+});
+
+test('locateOldText 兼容 CRLF/LF', () => {
+  const content = 'x\r\ny\r\nz\r\n';
+  const loc = locateOldText(content, 'y');
+  assert.ok(loc !== null);
+  assert.equal(loc.line, 2);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// hover 文案分型：DSH 新增 / DSH 修改 / DSH 删除
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('diffNature 纯新增 → add（DSH 新增）', () => {
+  assert.equal(diffNature('', 'a\nb'), 'add');
+  assert.equal(diffNature('a', 'a\nNEW'), 'add'); // 尾部追加
+  assert.equal(diffNature('a\nb', 'a\nNEW\nb'), 'add'); // 中间插入
+});
+
+test('diffNature 纯删除 → del（DSH 删除）', () => {
+  assert.equal(diffNature('a\nb', 'a'), 'del'); // 尾部删除
+  assert.equal(diffNature('a\nb\nc', 'a\nc'), 'del'); // 中间删除
+});
+
+test('diffNature 有增有删 → modify（DSH 修改）', () => {
+  assert.equal(diffNature('x', 'y'), 'modify');
+  assert.equal(diffNature('a\nOLD\nb', 'a\nNEW\nb'), 'modify');
+});
+
+test('summarizeDiff 统计增删行数', () => {
+  assert.deepEqual(summarizeDiff('a\nOLD\nb', 'a\nNEW\nb'), { added: 1, deleted: 1 });
+  assert.deepEqual(summarizeDiff('a', 'a\nN1\nN2'), { added: 2, deleted: 0 });
+  assert.deepEqual(summarizeDiff('a\nD1\nD2', 'a'), { added: 0, deleted: 2 });
+});
+
+test('deletedLines / addedLines 取出对应行文本', () => {
+  assert.deepEqual(deletedLines('a\nOLD\nb', 'a\nb'), ['OLD']);
+  assert.deepEqual(addedLines('a\nb', 'a\nNEW\nb'), ['NEW']);
+  assert.deepEqual(deletedLines('a\nb', 'a\nb'), []); // 无变化
+  assert.deepEqual(addedLines('', 'l1\nl2'), ['l1', 'l2']); // write 新建
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CRLF 撤销区间：currentText 必须取文件实际片段（否则残留尾部字符）
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('buildRevertEdit CRLF 文件多行插入还原：区间长度按文件实际片段，不留残字', () => {
+  const record: ModificationRecord = {
+    callId: 'c-crlf',
+    path: '/p/a.md',
+    oldText: 'B',
+    newText: 'A\nB',
+    line: 1,
+    lineCount: 2,
+    ts: 0,
+    tool: 'edit',
+  };
+  const content = 'X\r\nA\r\nB\r\nY\r\n'; // 文件 CRLF，newText 为 LF
+  const edit = buildRevertEdit(content, record);
+  assert.ok(edit !== null);
+  assert.equal(edit.currentText, 'A\r\nB'); // 文件实际片段（含 \r）
+  assert.equal(edit.startOffset, content.indexOf('A\r\nB'));
+  const result = content.slice(0, edit.startOffset) + edit.replacement + content.slice(edit.startOffset + edit.currentText.length);
+  assert.equal(result, 'X\r\nB\r\nY\r\n'); // 若区间短 1 字符会残留 'B' 尾巴
+});
+
+test('buildRevertEdit 还原文本换行风格对齐文件（CRLF 文件不混入裸 LF）', () => {
+  const record: ModificationRecord = {
+    callId: 'c-crlf2',
+    path: '/p/a.md',
+    oldText: 'O1\nO2',
+    newText: 'N',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+    tool: 'edit',
+  };
+  const edit = buildRevertEdit('N\r\n', record);
+  assert.ok(edit !== null);
+  assert.equal(edit.replacement, 'O1\r\nO2');
+});
+
+test('buildRevertEdit LF 文件保持 LF（不对齐成 CRLF）', () => {
+  const record: ModificationRecord = {
+    callId: 'c-lf',
+    path: '/p/a.md',
+    oldText: 'O1\nO2',
+    newText: 'N',
+    line: 1,
+    lineCount: 1,
+    ts: 0,
+    tool: 'edit',
+  };
+  const edit = buildRevertEdit('N\n', record);
+  assert.ok(edit !== null);
+  assert.equal(edit.replacement, 'O1\nO2');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// write 新建删除前置校验：文件是否仍等于 DSH 写入内容
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('writtenContentMatches 完全相同 → true', () => {
+  assert.equal(writtenContentMatches('a\nb\n', 'a\nb\n'), true);
+});
+
+test('writtenContentMatches 只容忍换行风格差异（CRLF/LF）', () => {
+  assert.equal(writtenContentMatches('a\r\nb', 'a\nb'), true);   // 仅换行风格不同
+  assert.equal(writtenContentMatches('a\nb\n\n', 'a\nb'), false); // 末尾多空行 = 用户编辑过
+});
+
+test('writtenContentMatches 用户追加/修改内容 → false（应走删除确认）', () => {
+  assert.equal(writtenContentMatches('a\nb\nmy note\n', 'a\nb'), false);
+  assert.equal(writtenContentMatches('a\nB\n', 'a\nb'), false);
+  assert.equal(writtenContentMatches('', 'a\nb'), false); // 文件被清空
+  assert.equal(writtenContentMatches('anything', ''), false); // 写入内容为空：一律不匹配
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 「丢弃 DSH 内容、保留我的新增」：只在纯追加时可拆分
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('userAppendedPart 纯追加（含 CRLF 差异）→ 返回用户追加部分', () => {
+  const written = 'a\nb';
+  assert.equal(userAppendedPart('a\nb\nmy note\n', written), 'my note\n');
+  assert.equal(userAppendedPart('a\r\nb\r\nmy note\r\n', written), 'my note\r\n');
+  assert.equal(userAppendedPart('a\nb\n\n\nmy note', written), 'my note'); // 衔接处多余空行被吃掉
+});
+
+test('userAppendedPart 用户改动了 DSH 原文（非纯追加）→ null', () => {
+  assert.equal(userAppendedPart('a\nB\nmy note', 'a\nb'), null); // 中间被改
+  assert.equal(userAppendedPart('prefix\na\nb\nnote', 'a\nb'), null); // 前面被插内容
+});
+
+test('userAppendedPart 无追加 / 仅空白 → null', () => {
+  assert.equal(userAppendedPart('a\nb', 'a\nb'), null);
+  assert.equal(userAppendedPart('a\nb\n\n', 'a\nb'), null);
+  assert.equal(userAppendedPart('a\nb', ''), null); // 写入内容为空：不可拆分
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 同行 add+del 合并为 modify（避免红绿装饰互相覆盖，只剩红色）
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('mergeLineMarks 同行 add+del → 单条 modify', () => {
+  assert.deepEqual(mergeLineMarks([{ line: 5, kind: 'del' }, { line: 5, kind: 'add' }]), [
+    { line: 5, kind: 'modify' },
+  ]);
+});
+
+test('mergeLineMarks 仅 add / 仅 del 保持原样', () => {
+  assert.deepEqual(mergeLineMarks([{ line: 3, kind: 'add' }]), [{ line: 3, kind: 'add' }]);
+  assert.deepEqual(mergeLineMarks([{ line: 4, kind: 'del' }]), [{ line: 4, kind: 'del' }]);
+});
+
+test('mergeLineMarks 多行混合：逐行判定并按行号升序', () => {
+  const merged = mergeLineMarks([
+    { line: 7, kind: 'add' },
+    { line: 6, kind: 'del' },
+    { line: 7, kind: 'del' },
+    { line: 8, kind: 'add' },
+  ]);
+  assert.deepEqual(merged, [
+    { line: 6, kind: 'del' },
+    { line: 7, kind: 'modify' },
+    { line: 8, kind: 'add' },
+  ]);
+});
+
+test('writtenContentMatches 末尾按回车（纯换行）也算被改动 → 不静默删除', () => {
+  assert.equal(writtenContentMatches('a\nb\n', 'a\nb'), false); // 末尾多一个回车
+  assert.equal(writtenContentMatches('a\nb\r\n', 'a\nb'), false); // CRLF 的末尾回车同样算
+});
+
+test('writtenContentMatches 仅换行风格不同（CRLF vs LF）仍视为未改动', () => {
+  assert.equal(writtenContentMatches('a\r\nb', 'a\nb'), true);
 });

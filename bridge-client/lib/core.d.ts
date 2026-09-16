@@ -7,12 +7,23 @@ export function isAllowedExternalUrl(url: string): boolean;
 /** 构造"打开外链"消息 */
 export function buildOpenExternalMessage(url: string): { kind: 'openExternal'; url: string };
 
-/** 构造"打开文件"消息（cwd 为会话工作目录，oldText 为 edit 场景改前片段；均可选，缺省省略字段） */
+/** 构造"打开文件"消息（cwd 为会话工作目录；oldText/newText 为工具卡片改前/改后片段，均可选） */
 export function buildOpenFileMessage(
   path: string,
   cwd: string | undefined,
   oldText?: string,
-): { kind: 'openFile'; path: string; cwd?: string; oldText?: string };
+  newText?: string,
+): { kind: 'openFile'; path: string; cwd?: string; oldText?: string; newText?: string };
+
+/** 构造"diff 已应用"转发消息（iframe 插件 → 父页面 → 扩展；tool 决定丢弃语义） */
+export function buildDiffAppliedMessage(payload: unknown): {
+  kind: 'diffApplied';
+  path: string;
+  diffs: { oldText: string; newText: string }[];
+  callId: string;
+  cwd?: string;
+  tool?: string;
+} | null;
 
 /** 构造"工作区同步回执"消息（bridgeAck，path 可选） */
 export function buildSyncWorkspaceAck(ok: boolean, path?: string): { kind: 'bridgeAck'; ok: boolean; path?: string };

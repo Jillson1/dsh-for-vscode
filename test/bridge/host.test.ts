@@ -255,12 +255,14 @@ test('handleBridgeMessage diffApplied 转发给 recordDiff', async () => {
     cwd: '/proj',
     diffs: [{ oldText: 'const x = 1', newText: 'const x = 2' }],
     callId: 'c-1',
+    tool: undefined, // 未携带 tool 时透传 undefined（记录层按未知工具保守处理）
   });
 });
 
-test('handleBridgeMessage diffApplied 过滤畸形 hunk', async () => {
-  // oldText 为空 / newText 缺失的 hunk 应被过滤：全部畸形 → 不调用 recordDiff
-  let recorded = 0;
+test('handleBridgeMessage diffApplied 过滤畸形 hunk（放开空 oldText）', async () => {
+  // 新语义：oldText 允许空串（write 新建 → 全绿高亮 + 丢弃=删除文件），
+  // 仅 newText 缺失/为空的 hunk 与 null 项被过滤。
+  const recorded: { diffs: { oldText: string; newText: string }[] }[] = [];
   await handleBridgeMessage({
     type: 'bridgeDiffApplied',
     path: 'src/a.ts',
@@ -271,6 +273,32 @@ test('handleBridgeMessage diffApplied 过滤畸形 hunk', async () => {
       null as unknown as { oldText: string; newText: string },
     ],
     callId: 'c-2',
+    tool: 'write',
+  }, {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    recordDiff: async (d) => { recorded.push(d); },
+    showWarning: () => {},
+    workspaceRoot: '/proj',
+  });
+  // 只保留 oldText 为字符串且 newText 非空的那条
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0].diffs, [{ oldText: '', newText: 'x' }]);
+});
+
+test('handleBridgeMessage diffApplied 全部畸形（newText 空/缺失）→ 不调用 recordDiff', async () => {
+  let recorded = 0;
+  await handleBridgeMessage({
+    type: 'bridgeDiffApplied',
+    path: 'src/a.ts',
+    cwd: '/proj',
+    diffs: [
+      { oldText: 'y', newText: '' },
+      null as unknown as { oldText: string; newText: string },
+    ],
+    callId: 'c-2b',
   }, {
     openExternal: async () => true,
     openTextDocument: async () => {},

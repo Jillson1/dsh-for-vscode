@@ -29,5 +29,7 @@
   "dsh.cmd.addSelectionToDsh.title": "Add Selection to DSH",
   "dsh.cmd.diffShow.title": "DSH: Show Diff",
   "dsh.cmd.diffRevert.title": "DSH: Revert Last Modification",
-  "dsh.cmd.diffRevertAll.title": "DSH: Revert All Modifications"
+  "dsh.cmd.diffKeep.title": "DSH: Keep Last Modification",
+  "dsh.cmd.diffRevertAll.title": "DSH: Revert All Modifications",
+  "dsh.cmd.diffClearMarks.title": "DSH: Clear Marks (Keep Changes)"
 }

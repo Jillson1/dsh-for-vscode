@@ -17,12 +17,18 @@ export interface BridgeMessageDeps {
   /** 打开文档后定位到 1-based 行并高亮（生产接 showTextDocument + revealRange） */
   revealLine(path: string, line: number): Thenable<void>;
   /**
+   * 按改前片段定位真实修改行（1-based）：用修改记录里的改后片段定位。
+   * 必要性：edit 落盘后改前片段已不在文件里，直接 indexOf 必然失败（历史缺陷：
+   * 点击 edit 卡片不跳行或跳到上一次的位置）。未注入时回退旧的 indexOf 逻辑。
+   */
+  resolveEditLine?(path: string, oldText: string): Promise<number | undefined> | number | undefined;
+  /**
    * 记录一条 applied diff（A 组：edit/write 落盘后的修改可视化）。
    * 生产接 DiffTracker.record：读文件定位修改行 → 编辑区高亮 + 记入撤销栈。
    * 纯逻辑只负责路径解析与记录构造，实际 vscode 动作由注入方完成。
    * 可选：未注入（旧测试/降级路径）时静默忽略 diff 消息。
    */
-  recordDiff?(diff: { path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string }): void | Promise<void>;
+  recordDiff?(diff: { path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string; tool?: string }): void | Promise<void>;
   /** 弹用户可见提示（生产接 vscode.window.showWarningMessage，测试注入假实现以断言） */
   showWarning(msg: string): void;
   /** 工作区根目录（相对路径解析的兜底基准，生产由扩展入口注入） */
@@ -66,16 +72,19 @@ export function resolveBridgePath(raw: string, sessionCwd: string | undefined, w
 }
 
 /**
- * 在文件内容中定位改前片段（oldText）的起始行号（1-based）。
- * 返回 `undefined` 表示无法定位：oldText 为空、内容不含该片段（文件可能已被后续修改）。
+ * 在文件内容中定位片段（oldText/newText）的起始行号（1-based）。
+ * 返回 `undefined` 表示无法定位：片段为空、内容不含该片段。
  * 取第一次出现位置，符合 edit 单次匹配语义；replace_all 场景定位第一处。
- * @param content 文件当前全文
- * @param oldText 改前片段（edit 的 old_string）
- * @returns 1-based 起始行号，或 undefined
+ * **兼容 CRLF/LF**：DSH 侧片段是 LF，Windows 磁盘文件常是 CRLF，裸 indexOf 会失败
+ * （历史缺陷：跳行静默失效）。先原样找，失败后按换行风格归一重试。
  */
 export function computeLineByText(content: string, oldText: string): number | undefined {
   if (typeof content !== 'string' || typeof oldText !== 'string' || oldText === '') return undefined;
-  const idx = content.indexOf(oldText);
+  let idx = content.indexOf(oldText);
+  if (idx === -1 && oldText.includes('\n')) {
+    const normalized = oldText.includes('\r\n') ? oldText.replace(/\r\n/g, '\n') : oldText.replace(/\n/g, '\r\n');
+    idx = content.indexOf(normalized);
+  }
   if (idx === -1) return undefined;
   return content.slice(0, idx).split('\n').length;
 }
@@ -103,17 +112,35 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
       try {
         // 打开文档可能因文件不存在/无权限等失败，捕获后给用户可见反馈而非未处理拒绝
         await deps.openTextDocument(r.path);
-        // 定位目标行：优先消息自带 line（read 场景的 offset 直传），
-        // 缺省但有 oldText（edit 场景的改前片段）时读文件 indexOf 计算。
+        // 定位目标行：优先消息自带 line（read 场景的 offset 直传）；
+        // 否则依次尝试：记录里的 newText 定位（最准）→ 文件里的 oldText → 文件里的 newText。
         let targetLine = typeof msg.line === 'number' && Number.isFinite(msg.line) && msg.line >= 1
           ? msg.line
           : undefined;
         if (targetLine === undefined && typeof msg.oldText === 'string' && msg.oldText !== '') {
+          // 1) 优先走修改记录：改前片段命中该次修改 → 用改后片段定位真实行
+          try {
+            targetLine = await deps.resolveEditLine?.(r.path, msg.oldText);
+          } catch {
+            targetLine = undefined;
+          }
+          // 2) 回退：直接在文件里找改前片段（文件未被该次修改改写时有效）
+          if (targetLine === undefined) {
+            try {
+              const content = await deps.readFileText(r.path);
+              targetLine = computeLineByText(content, msg.oldText);
+            } catch {
+              targetLine = undefined; // 读文件失败（权限/IO）：只打开文件，不跳行
+            }
+          }
+        }
+        // 3) 再回退：用改后片段定位（扩展重载后记录已清空时的兜底）
+        if (targetLine === undefined && typeof msg.newText === 'string' && msg.newText !== '') {
           try {
             const content = await deps.readFileText(r.path);
-            targetLine = computeLineByText(content, msg.oldText);
+            targetLine = computeLineByText(content, msg.newText);
           } catch {
-            targetLine = undefined; // 读文件失败（权限/IO）：只打开文件，不跳行
+            targetLine = undefined;
           }
         }
         if (targetLine !== undefined) {
@@ -140,16 +167,16 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
     return;
   }
   if (msg.type === 'bridgeDiffApplied') {
-    // A 组：edit/write 落盘后的 applied diff → 交给注入方记录（高亮 + 撤销栈）。
-    // diffs 已由桥接侧过滤（只含 oldText/newText 均为非空字符串的 hunk）；
-    // 此处再做一次防御性过滤，避免畸形负载进入记录层。
+    // A/B 组：edit/write 落盘后的 applied diff → 交给注入方记录（高亮 + 丢弃栈）。
+    // 过滤规则：oldText 必须是字符串（**允许空串**——write 新建的改前内容为空，
+    // 高亮为"全新增行"、丢弃语义 = 删除文件），newText 必须非空。
     const diffs = Array.isArray(msg.diffs)
-      ? msg.diffs.filter((d) => d && typeof d.oldText === 'string' && d.oldText !== '' && typeof d.newText === 'string' && d.newText !== '')
+      ? msg.diffs.filter((d) => d && typeof d.oldText === 'string' && typeof d.newText === 'string' && d.newText !== '')
       : [];
-    if (diffs.length === 0) return; // 无可用 hunk（write 新建等）：无可高亮/撤销，静默忽略
+    if (diffs.length === 0) return; // 无可用 hunk：无可高亮，静默忽略
     if (deps.recordDiff === undefined) return; // 未注入记录器（旧调用方）：静默忽略
     try {
-      await deps.recordDiff({ path: msg.path, cwd: msg.cwd, diffs, callId: msg.callId });
+      await deps.recordDiff({ path: msg.path, cwd: msg.cwd, diffs, callId: msg.callId, tool: msg.tool });
     } catch (err) {
       // 记录失败（读文件 IO 等）不影响主流程：仅提示，不打断
       deps.showWarning(`无法记录修改：${msg.path}（${errSummary(err)}）`);

@@ -134,6 +134,9 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
           recordDiff: async (d) => {
             await this.diffService?.record(d);
           },
+          // edit 卡片点击的精确跳行：走修改记录（oldText → newText 定位），
+          // 比直接 indexOf 改前片段可靠（改前片段落盘后已不在文件里）
+          resolveEditLine: async (p, oldText) => this.diffService?.lineForOldText(p, oldText),
           // 用户提示统一走 vscode.window.showWarningMessage（host 层不 import vscode，保持纯逻辑可单测）
           showWarning: (m) => void vscode.window.showWarningMessage(m),
           workspaceRoot: this.workspaceRoot(), // 工作区根目录：openFile 相对路径解析的兜底基准

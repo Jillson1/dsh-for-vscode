@@ -8,6 +8,7 @@ import {
   buildSyncWorkspaceAck,
   buildCopyTextMessage,
   buildCopyTextAck,
+  buildDiffAppliedMessage,
   isBridgeMessage,
   HANDSHAKE_TOKEN_KEY,
   getShortcutCommand,
@@ -128,4 +129,20 @@ test('buildReadTextMessage / buildReadTextAck 构造剪贴板读取消息', () =
   // 读取失败：不带 text 字段
   assert.deepEqual(buildReadTextAck('req-2', false), { kind: 'readTextAck', requestId: 'req-2', ok: false });
   assert.deepEqual(buildReadTextAck('req-3', true, ''), { kind: 'readTextAck', requestId: 'req-3', ok: false });
+});
+
+test('buildDiffAppliedMessage 透传 tool（write 新建丢弃语义依赖它）', () => {
+  const msg = buildDiffAppliedMessage({
+    path: 'E:\p\n.md',
+    diffs: [{ oldText: '', newText: 'hi' }],
+    callId: 'c-1',
+    tool: 'write',
+  });
+  assert.ok(msg !== null);
+  assert.equal(msg.tool, 'write');
+  assert.deepEqual(msg.diffs, [{ oldText: '', newText: 'hi' }]);
+  // 空 oldText 必须保留（write 新建 → 全绿高亮 + 丢弃删除文件）
+  const noTool = buildDiffAppliedMessage({ path: 'a.ts', diffs: [{ oldText: 'x', newText: 'y' }], callId: 'c-2' });
+  assert.ok(noTool !== null);
+  assert.equal(noTool.tool, undefined);
 });

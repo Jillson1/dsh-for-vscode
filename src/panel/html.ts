@@ -14,8 +14,8 @@ export type PanelMessage =
   | { type: 'copyUrl' }
   | { type: 'showLogs' }
   | { type: 'bridgeOpenExternal'; url: string }
-  | { type: 'bridgeOpenFile'; path: string; cwd?: string; line?: number; oldText?: string }
-  | { type: 'bridgeDiffApplied'; path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string }
+  | { type: 'bridgeOpenFile'; path: string; cwd?: string; line?: number; oldText?: string; newText?: string }
+  | { type: 'bridgeDiffApplied'; path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string; tool?: string }
   | { type: 'bridgeCopyText'; text: string; requestId: string }
   | { type: 'bridgeReadText'; requestId: string }
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
@@ -125,6 +125,7 @@ if (iframeEl) {
         cwd: typeof d.cwd === 'string' ? d.cwd : undefined,
         line: typeof d.line === 'number' && Number.isFinite(d.line) ? d.line : undefined,
         oldText: typeof d.oldText === 'string' && d.oldText !== '' ? d.oldText : undefined,
+        newText: typeof d.newText === 'string' && d.newText !== '' ? d.newText : undefined,
       });
       return;
     }
@@ -141,6 +142,7 @@ if (iframeEl) {
             )
           : [],
         callId: typeof d.callId === 'string' ? d.callId : '',
+        tool: typeof d.tool === 'string' ? d.tool : undefined,
       });
       return;
     }

@@ -20,11 +20,13 @@ export function buildOpenExternalMessage(url) {
   return { kind: 'openExternal', url };
 }
 
-// 构造"打开文件"消息（cwd 为会话工作目录，oldText 为 edit 场景的改前片段；均可选，缺省省略字段）
-export function buildOpenFileMessage(path, cwd, oldText) {
+// 构造"打开文件"消息（cwd 为会话工作目录；oldText/newText 为工具卡片的改前/改后片段，均可选）
+// newText 用于跳行兜底：改前片段落盘后已不在文件里，扩展在无修改记录时用改后片段定位。
+export function buildOpenFileMessage(path, cwd, oldText, newText) {
   const msg = { kind: 'openFile', path };
   if (cwd !== undefined) msg.cwd = cwd;
   if (oldText !== undefined && typeof oldText === 'string' && oldText !== '') msg.oldText = oldText;
+  if (newText !== undefined && typeof newText === 'string' && newText !== '') msg.newText = newText;
   return msg;
 }
 
@@ -156,11 +158,14 @@ export function buildDiffAppliedMessage(payload) {
   if (typeof payload.path !== 'string' || payload.path === '') return null;
   const diffs = Array.isArray(payload.diffs)
     ? payload.diffs
-        .filter((d) => d && typeof d.oldText === 'string' && typeof d.newText === 'string')
+        .filter((d) => d && typeof d.oldText === 'string' && typeof d.newText === 'string' && d.newText !== '')
         .map((d) => ({ oldText: d.oldText, newText: d.newText }))
     : [];
   if (diffs.length === 0) return null;
   const msg = { kind: 'diffApplied', path: payload.path, diffs, callId: String(payload.callId ?? '') };
   if (typeof payload.cwd === 'string' && payload.cwd !== '') msg.cwd = payload.cwd;
+  // 来源工具名（edit/write）：扩展据此判定丢弃语义（write 新建 → 删除文件）。
+  // 缺了它 write 新建会退化成"文本还原"，hover 也不会出现「丢弃文件」。
+  if (typeof payload.tool === 'string' && payload.tool !== '') msg.tool = payload.tool;
   return msg;
 }

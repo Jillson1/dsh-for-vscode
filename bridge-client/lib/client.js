@@ -375,11 +375,14 @@ window.__ModuleLoader__.load({
       const abs = btn.getAttribute("data-abs-path");
       const oldTextRaw = btn.getAttribute("data-old-text");
       const oldText = oldTextRaw !== null && oldTextRaw !== "" ? oldTextRaw : undefined;
+      // 改后片段（newText）：跳行兜底用（改前片段落盘后已不在文件里）
+      const newTextRaw = btn.getAttribute("data-new-text");
+      const newText = newTextRaw !== null && newTextRaw !== "" ? newTextRaw : undefined;
       // 路径优先级：data-abs-path（工具卡片绝对路径）> title（fileMention 完整路径）>
       // aria-label / 文本（回退；扩展侧按工作区根解析）。
       const title = btn.getAttribute("title");
       const label = abs && abs !== "" ? abs : (title && title !== "" ? title : (btn.getAttribute("aria-label") || btn.textContent || ""));
-      return buildOpenFileMessage(label, undefined, oldText);
+      return buildOpenFileMessage(label, undefined, oldText, newText);
     }
     function bindLinkInterception() {
       document.addEventListener("click", (e) => {

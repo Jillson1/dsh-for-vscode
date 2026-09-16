@@ -2,7 +2,7 @@
   "name": "dsh-for-vscode",
   "displayName": "DSH for VS Code",
   "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位），右键文件/选区即可添加到 DSH 输入框",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "Jillson1",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -27,7 +27,12 @@
     "onCommand:dsh.bridge.uninstall",
     "onCommand:dsh.copyLogs",
     "onCommand:dsh.addFileToDsh",
-    "onCommand:dsh.addSelectionToDsh"
+    "onCommand:dsh.addSelectionToDsh",
+    "onCommand:dsh.diff.show",
+    "onCommand:dsh.diff.revert",
+    "onCommand:dsh.diff.keep",
+    "onCommand:dsh.diff.revertAll",
+    "onCommand:dsh.diff.clearMarks"
   ],
   "contributes": {
     "viewsContainers": {
@@ -152,8 +157,18 @@
         "category": "DSH"
       },
       {
+        "command": "dsh.diff.keep",
+        "title": "%dsh.cmd.diffKeep.title%",
+        "category": "DSH"
+      },
+      {
         "command": "dsh.diff.revertAll",
         "title": "%dsh.cmd.diffRevertAll.title%",
+        "category": "DSH"
+      },
+      {
+        "command": "dsh.diff.clearMarks",
+        "title": "%dsh.cmd.diffClearMarks.title%",
         "category": "DSH"
       }
     ],

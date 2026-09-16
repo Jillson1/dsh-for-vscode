@@ -401,13 +401,34 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('dsh')) onConfigChanged();
     }),
-    // —— A 组：修改可视化命令 + 生命周期 ——
+    // —— A/B 组：修改可视化命令 + 生命周期 ——
     vscode.commands.registerCommand('dsh.diff.show', () => void showDiffForActive()),
-    vscode.commands.registerCommand('dsh.diff.revert', () => void revertActiveDiff()),
+    // revert 支持可选参数：hover 按钮传 callId（精确撤销该处）；无参 = 撤销当前文件最近一处
+    vscode.commands.registerCommand('dsh.diff.revert', (callId?: string) => {
+      if (typeof callId === 'string' && callId !== '') void revertDiff(callId);
+      else void revertActiveDiff();
+    }),
+    // keep：保留改动（文件不动），清除该处修改标记
+    vscode.commands.registerCommand('dsh.diff.keep', (callId?: string) => {
+      if (typeof callId === 'string' && callId !== '') void keepDiff(callId);
+      else void keepActiveDiff();
+    }),
     vscode.commands.registerCommand('dsh.diff.revertAll', () => void revertAllDiffs()),
+    // 清除当前文件的全部 DSH 标记（保留改动）：记录/装饰错位时的一键清理入口
+    vscode.commands.registerCommand('dsh.diff.clearMarks', () => void clearMarksForActive()),
     // 编辑器切换时刷新高亮（文件打开/聚焦时把已记录修改标出来）
     vscode.window.onDidChangeActiveTextEditor((ed) => {
       if (ed && ds) ds.refreshFile(ed.document.uri.fsPath);
+    }),
+    // 编辑器可见集合变化（分屏/切组/新开标签）→ 重建所有可见文件的高亮
+    vscode.window.onDidChangeVisibleTextEditors(() => {
+      if (ds) ds.refreshVisible();
+    }),
+    // 文档内容变化（含 DSH 外部写入后 VS Code 重载文件）→ 重建该文件高亮。
+    // 必要性：外部写入会替换内存文档内容，先前按旧内容算出的 decoration 区间会失效，
+    // 表现为"刚编辑完看不到高亮，切几次标签才出现"。
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (ds && ds.hasRecords(e.document.uri.fsPath)) ds.refreshFile(e.document.uri.fsPath);
     }),
     ds.registerContentProvider(),
     ds.registerHoverProvider(),
@@ -443,14 +464,71 @@ async function revertActiveDiff(): Promise<void> {
     void vscode.window.showInformationMessage('当前文件没有 DSH 修改记录');
     return;
   }
+  await revertDiff(callId);
+}
+
+/** 撤销指定 callId 的 DSH 修改（hover 按钮入口）。 */
+async function revertDiff(callId: string): Promise<void> {
+  const s = diffService;
+  if (!s) return;
   const r = await s.revert(callId);
   if (r.ok) {
-    void vscode.window.showInformationMessage('已撤销该处 DSH 修改');
+    if (r.deletedFile === true) {
+      void vscode.window.showInformationMessage('已删除该文件（可从系统回收站恢复）');
+    } else if (r.keptUserPart === true) {
+      void vscode.window.showInformationMessage('已丢弃 DSH 写入的内容，你的新增已保留');
+    } else {
+      void vscode.window.showInformationMessage('已撤销该处 DSH 修改');
+    }
+  } else if (r.reason === 'cancelled') {
+    // 用户在确认弹窗中取消：静默返回
   } else if (r.reason === 'anchor-missing') {
     void vscode.window.showWarningMessage('文件已被改动，该处修改无法撤销');
+  } else if (r.reason === 'unknown-tool') {
+    void vscode.window.showWarningMessage('无法丢弃：未收到来源工具信息（旧版桥接），请 Reload Window 后重试');
+  } else if (r.reason === 'delete-failed') {
+    void vscode.window.showWarningMessage('删除文件失败（文件可能被其他程序占用）');
+  } else if (r.reason === 'not-found') {
+    void vscode.window.showInformationMessage('该处修改记录不存在（可能已保留或撤销）');
   } else {
     void vscode.window.showWarningMessage('撤销失败');
   }
+}
+
+/** 保留当前文件最近一条 DSH 修改（清除标记，文件改动保留）。 */
+async function keepActiveDiff(): Promise<void> {
+  const s = diffService;
+  const ed = vscode.window.activeTextEditor;
+  if (!s || !ed) return;
+  const callId = s.lastCallId(ed.document.uri.fsPath);
+  if (callId === undefined) {
+    void vscode.window.showInformationMessage('当前文件没有 DSH 修改记录');
+    return;
+  }
+  await keepDiff(callId);
+}
+
+/** 保留指定 callId 的 DSH 修改（hover 按钮入口）。 */
+async function keepDiff(callId: string): Promise<void> {
+  const s = diffService;
+  if (!s) return;
+  const r = await s.keep(callId);
+  if (r.ok) {
+    void vscode.window.showInformationMessage('已保留该处修改（不再标记）');
+  } else {
+    void vscode.window.showInformationMessage('该处修改记录不存在（可能已撤销）');
+  }
+}
+
+/** 清除当前文件的全部 DSH 标记（保留改动）：记录与装饰错位时的稳妥清理入口。 */
+async function clearMarksForActive(): Promise<void> {
+  const s = diffService;
+  const ed = vscode.window.activeTextEditor;
+  if (!s || !ed) return;
+  const n = s.clearMarksForFile(ed.document.uri.fsPath);
+  void vscode.window.showInformationMessage(
+    n > 0 ? `已清除 ${n} 处 DSH 标记（文件内容未改动）` : '当前文件没有 DSH 标记',
+  );
 }
 
 /** 撤销当前文件的全部 DSH 修改。 */
