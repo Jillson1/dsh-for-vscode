@@ -158,6 +158,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // handshakeOk：握手回执（onBridgeAck 写入）；undefined=尚未握手，true/false=握手成败。
   let install: BridgeInstallResult | null = null;
   let handshakeOk: boolean | undefined;
+  // bridgeCapabilities：桥接握手回执上报的能力表（0.4.0 起）；
+  // undefined = 尚未握手或旧桥接未上报。T0 只记录+打日志，阶段 2/3 用它门控命令显隐。
+  let bridgeCapabilities: string[] | undefined;
   let handshakeTimer: NodeJS.Timeout | undefined;
   let evalTimer: NodeJS.Timeout | undefined;
   let panelOpened = false; // 是否已有面板打开过（触发握手超时的前提之一）
@@ -218,11 +221,25 @@ export function activate(context: vscode.ExtensionContext): void {
     }, HANDSHAKE_TIMEOUT_MS);
   }
 
-  /** 面板握手回执回调（两个面板共享）：记录结果并取消超时（握手已发生，无论成败） */
-  function onBridgeAck(ok: boolean): void {
-    appendLog(`[bridge] handshake ${ok ? 'ok' : 'failed'}`);
+  /**
+   * 面板握手回执回调（两个面板共享）：记录结果并取消超时（握手已发生，无论成败）。
+   * bridge 0.4.0 起回执携带 capabilities 能力表：扩展据此门控命令显隐（最小版能力协商 E1）。
+   * 旧桥接不带该字段 → capabilities 为 undefined，视为"未知能力"（按最保守策略处理）。
+   */
+  function onBridgeAck(ok: boolean, capabilities?: string[]): void {
+    const caps = capabilities === undefined ? '(未上报)' : `[${capabilities.join(',')}]`;
+    appendLog(`[bridge] handshake ${ok ? 'ok' : 'failed'} capabilities=${caps}`);
     handshakeOk = ok;
+    bridgeCapabilities = capabilities;
+    // 能力表写入 VS Code 上下文键：后续命令/菜单可用 when 子句门控显隐
+    // （如 `dsh.bridge.capabilities =~ /approval/`），避免"只装一半"时命令点了没反应。
+    void vscode.commands.executeCommand('setContext', 'dsh.bridge.capabilities', bridgeCapabilities ?? []);
     clearHandshakeTimer();
+  }
+
+  /** 交互增强（bridge 0.4.0）上行消息落点：T0 打桩（打日志），后续阶段由各服务接管 */
+  function logBridgeEvent(event: { name: string; [k: string]: unknown }): void {
+    appendLog(`[bridge] event ${event.name} ${JSON.stringify(event)}`);
   }
 
   /** 任一面板首次打开：标记已打开并尝试启动握手超时（幂等，不重复建定时器） */
@@ -350,6 +367,7 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaceRootGetter, // workspaceRoot：文件相对路径解析的兜底基准
     bridgeEnabledGetter, // bridgeEnabled：dsh.bridge.enabled 驱动握手脚本注入
     diffService, // A 组：修改服务（recordDiff / bridgeDiffApplied 共用）
+    logBridgeEvent, // bridge 0.4.0：交互增强上行消息落点（T0 打桩）
   );
   const panelSecondary = new DshPanelProvider(
     manager,
@@ -358,6 +376,7 @@ export function activate(context: vscode.ExtensionContext): void {
     workspaceRootGetter,
     bridgeEnabledGetter,
     diffService,
+    logBridgeEvent,
   );
   new StatusBarController(manager);
 

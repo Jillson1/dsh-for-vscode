@@ -30,9 +30,16 @@ export function buildOpenFileMessage(path, cwd, oldText, newText) {
   return msg;
 }
 
-// 构造"工作区同步回执"消息（bridgeAck，path 可选）
-export function buildSyncWorkspaceAck(ok, path) {
-  return path === undefined ? { kind: 'bridgeAck', ok } : { kind: 'bridgeAck', ok, path };
+// 构造"工作区同步回执"消息（bridgeAck，path 可选；capabilities 为扩展侧能力表，可选）
+// capabilities（0.4.0）：握手即交换能力表，扩展据此门控命令显隐，避免"只装一半"时的玄学降级。
+// 传空数组/非数组时省略字段，保持消息形状向后兼容（旧扩展按 { kind, ok } 解析）。
+export function buildSyncWorkspaceAck(ok, path, capabilities) {
+  const msg = path === undefined ? { kind: 'bridgeAck', ok } : { kind: 'bridgeAck', ok, path };
+  if (Array.isArray(capabilities) && capabilities.length > 0) {
+    const list = capabilities.filter((c) => typeof c === 'string' && c !== '');
+    if (list.length > 0) msg.capabilities = list;
+  }
+  return msg;
 }
 
 // 构造"复制文本"消息（iframe 页面 → 父页面 → 扩展 → 系统剪贴板）
@@ -168,4 +175,241 @@ export function buildDiffAppliedMessage(payload) {
   // 缺了它 write 新建会退化成"文本还原"，hover 也不会出现「丢弃文件」。
   if (typeof payload.tool === 'string' && payload.tool !== '') msg.tool = payload.tool;
   return msg;
+}
+
+// ============================================================================
+// 交互增强地基（bridge 0.4.0）：能力表 + 新消息构造/校验
+//
+// 消息方向（与《交互增强开发方案》§4.1 一致）：
+//   上行（页面 → 扩展）：sessionState / approvalRequest / questionRequest / changesSync / checkpointsReady
+//   下行（扩展 → 页面）：quickEditSubmit / approvalDecision / questionAnswer / requestChanges
+//
+// 上行投递方式：插件（独立 bundle，dsh-file-jump）用
+//   window.dispatchEvent(new CustomEvent(UPLINK_EVENT, { detail: { kind, payload } }))
+// 把新消息交给桥接；桥接用 buildBridgeUplinkMessage 按白名单校验/归一后转发父页面。
+// 下行投递方式：父页面（扩展）postMessage 到 iframe，桥接用 parse* 校验后加
+// `dsh-file-jump:` 命名空间前缀转给插件（与既有 injectComposer 同款解耦方式）。
+//
+// 设计原则：所有归一/校验都在这层纯函数里完成（可单测）；client.js 只负责事件绑定与转发。
+// 未知 kind 或形状非法的消息一律返回 null → 静默丢弃（桥接与插件/扩展版本混装时的兜底）。
+// ============================================================================
+
+/** 桥接具备的能力表（握手 bridgeAck 下发，扩展据此门控命令显隐） */
+export const BRIDGE_CAPABILITIES = [
+  'openFile', // 卡片路径点击 → 打开文件（含精确跳行）
+  'diffApplied', // 变更高亮 / 丢弃 / 保留
+  'injectComposer', // Add to DSH：文件引用注入 composer
+  'quickEdit', // F11 就地指令提交
+  'approval', // F6 审批闸门
+  'question', // F8 提问 / plan-review
+  'changes', // F1/F3 变更账本与树
+  'checkpoint', // F9 检查点
+  'sessionState', // F7 会话状态（运行中/待决数）
+];
+
+/** 上行消息投递事件名（插件 dispatch、桥接监听；两侧必须一致） */
+export const UPLINK_EVENT = 'dsh-file-jump:bridgeUp';
+
+/** 非空字符串判定（内部工具，不导出） */
+function isNonEmptyString(v) {
+  return typeof v === 'string' && v !== '';
+}
+
+/** 有限数字兜底（内部工具：非法/缺失时取 fallback） */
+function finiteOr(v, fallback) {
+  return Number.isFinite(v) ? v : fallback;
+}
+
+/**
+ * 构造"会话状态"消息（F7 状态栏/通知的数据源）。
+ * @param {object} p 快照派生的状态 { sessionId, running, turn, pending }
+ * @returns {null | { kind:'sessionState', sessionId:string, running:boolean, turn:number, pending:number }}
+ *   缺 sessionId 时返回 null；running 严格布尔化，turn/pending 缺省为 0。
+ */
+export function buildSessionStateMessage(p) {
+  if (!p || typeof p !== 'object' || !isNonEmptyString(p.sessionId)) return null;
+  return {
+    kind: 'sessionState',
+    sessionId: p.sessionId,
+    running: p.running === true,
+    turn: finiteOr(p.turn, 0),
+    pending: finiteOr(p.pending, 0),
+  };
+}
+
+/**
+ * 构造"审批请求"消息（F6：DSH 请求许可 → VS Code 模态框）。
+ * 字段形状与 host 侧 `session/pending` 帧一致（sessionId / approvalId / toolName / callId? / reason?）。
+ * @returns {null | object} sessionId / approvalId / toolName 任一缺失即返回 null。
+ */
+export function buildApprovalRequestMessage(p) {
+  if (!p || typeof p !== 'object') return null;
+  if (!isNonEmptyString(p.sessionId) || !isNonEmptyString(p.approvalId) || !isNonEmptyString(p.toolName)) {
+    return null;
+  }
+  const msg = { kind: 'approvalRequest', sessionId: p.sessionId, approvalId: p.approvalId, toolName: p.toolName };
+  if (isNonEmptyString(p.callId)) msg.callId = p.callId;
+  if (isNonEmptyString(p.reason)) msg.reason = p.reason;
+  return msg;
+}
+
+/**
+ * 构造"提问请求"消息（F8：question / plan-review）。
+ * questions 为 AskUserQuestionItem 列表：逐项只保留对象项，非数组按空数组处理
+ * （提问本身仍可呈现，只是没有可选项——比整条丢弃更安全）。
+ */
+export function buildQuestionRequestMessage(p) {
+  if (!p || typeof p !== 'object') return null;
+  if (!isNonEmptyString(p.sessionId) || !isNonEmptyString(p.questionId)) return null;
+  const questions = Array.isArray(p.questions)
+    ? p.questions.filter((q) => q !== null && typeof q === 'object')
+    : [];
+  return { kind: 'questionRequest', sessionId: p.sessionId, questionId: p.questionId, questions };
+}
+
+/**
+ * 归一单条变更记录（F1 ChangeRecord 的桥接子集）。
+ * 只白名单拷贝已知字段，避免把插件侧的任意对象灌进扩展（体积与安全双重考虑）。
+ * 必填：callId 非空；path 或 absPath 至少之一非空。
+ */
+function normalizeChangeRecord(r) {
+  if (!r || typeof r !== 'object') return null;
+  if (!isNonEmptyString(r.callId)) return null;
+  if (!isNonEmptyString(r.path) && !isNonEmptyString(r.absPath)) return null;
+  const rec = {
+    callId: r.callId,
+    path: isNonEmptyString(r.path) ? r.path : r.absPath,
+    absPath: isNonEmptyString(r.absPath) ? r.absPath : r.path,
+  };
+  if (isNonEmptyString(r.sessionId)) rec.sessionId = r.sessionId;
+  if (Number.isFinite(r.turn)) rec.turn = r.turn;
+  if (r.tool === 'edit' || r.tool === 'write') rec.tool = r.tool;
+  if (typeof r.oldText === 'string') rec.oldText = r.oldText;
+  if (typeof r.newText === 'string') rec.newText = r.newText;
+  if (Number.isFinite(r.time)) rec.time = r.time;
+  if (r.source === 'relay' || r.source === 'replay') rec.source = r.source;
+  if (isNonEmptyString(r.fileHashAtRecord)) rec.fileHashAtRecord = r.fileHashAtRecord;
+  return rec;
+}
+
+/**
+ * 构造"变更同步"消息（F1：回放/relay 批量推送给扩展账本）。
+ * 空 records 是合法语义（"该会话当前没有变更"），因此不在这里丢弃；
+ * 全部记录都不合法时退化为空数组，由扩展侧按"无变更"处理。
+ */
+export function buildChangesSyncMessage(p) {
+  if (!p || typeof p !== 'object' || !isNonEmptyString(p.sessionId)) return null;
+  if (!Array.isArray(p.records)) return null;
+  const records = p.records.map(normalizeChangeRecord).filter((r) => r !== null);
+  return { kind: 'changesSync', sessionId: p.sessionId, records };
+}
+
+/**
+ * 构造"检查点就绪/恢复回执"消息（F9：恢复完成后回执给扩展）。
+ * ok 必须是布尔（缺了就无法判定成败）→ 返回 null。
+ */
+export function buildCheckpointsReadyMessage(p) {
+  if (!p || typeof p !== 'object' || typeof p.ok !== 'boolean') return null;
+  const msg = { kind: 'checkpointsReady', ok: p.ok };
+  if (isNonEmptyString(p.sessionId)) msg.sessionId = p.sessionId;
+  if (isNonEmptyString(p.error)) msg.error = p.error;
+  return msg;
+}
+
+/**
+ * 上行统一入口：把插件投递的 { kind, payload } 按白名单构造成桥接消息。
+ * client.js 的唯一上行分发点——新增消息只需在这里加一个 case。
+ * @returns {null | object} 未知 kind 或形状非法 → null（调用方静默丢弃）
+ */
+export function buildBridgeUplinkMessage(detail) {
+  if (!detail || typeof detail !== 'object') return null;
+  const payload = detail.payload;
+  switch (detail.kind) {
+    case 'sessionState':
+      return buildSessionStateMessage(payload);
+    case 'approvalRequest':
+      return buildApprovalRequestMessage(payload);
+    case 'questionRequest':
+      return buildQuestionRequestMessage(payload);
+    case 'changesSync':
+      return buildChangesSyncMessage(payload);
+    case 'checkpointsReady':
+      return buildCheckpointsReadyMessage(payload);
+    default:
+      return null; // 未知 kind：静默丢弃（版本混装兜底）
+  }
+}
+
+/**
+ * 校验下行"就地指令提交"（F11 Quick Edit）。
+ * 首行先校验 kind：下行是"逐条尝试"的分发，若不校验 kind，只带 sessionId 的其它消息
+ * 会被宽松解析器误收（实测踩坑：非法 outcome 的 approvalDecision 曾落进 requestChanges 被转发）。
+ * path 非空、startLine/endLine 为有限数字、instruction 为字符串（可为空串：空指令由扩展侧拦）。
+ */
+export function parseQuickEditSubmit(d) {
+  if (!d || typeof d !== 'object' || d.kind !== 'quickEditSubmit') return null;
+  if (!isNonEmptyString(d.path)) return null;
+  if (!Number.isFinite(d.startLine) || !Number.isFinite(d.endLine)) return null;
+  if (typeof d.instruction !== 'string') return null;
+  return {
+    kind: 'quickEditSubmit',
+    path: d.path,
+    startLine: d.startLine,
+    endLine: d.endLine,
+    instruction: d.instruction,
+  };
+}
+
+/** 校验下行"审批决策"（F6）：outcome 只接受 'allowed-once' | 'rejected'（载荷不支持"总是允许"） */
+export function parseApprovalDecision(d) {
+  if (!d || typeof d !== 'object' || d.kind !== 'approvalDecision') return null;
+  if (!isNonEmptyString(d.sessionId) || !isNonEmptyString(d.approvalId)) return null;
+  if (d.outcome !== 'allowed-once' && d.outcome !== 'rejected') return null;
+  return { kind: 'approvalDecision', sessionId: d.sessionId, approvalId: d.approvalId, outcome: d.outcome };
+}
+
+/** 校验下行"提问回答"（F8）：一次问答整批回填，answer 必须是对象/数组（null/undefined 视为未答） */
+export function parseQuestionAnswer(d) {
+  if (!d || typeof d !== 'object' || d.kind !== 'questionAnswer') return null;
+  if (!isNonEmptyString(d.sessionId) || !isNonEmptyString(d.questionId)) return null;
+  if (d.answer === null || d.answer === undefined) return null;
+  return { kind: 'questionAnswer', sessionId: d.sessionId, questionId: d.questionId, answer: d.answer };
+}
+
+/** 校验下行"请求重放变更"（扩展加载后主动要一次回放，F1） */
+export function parseRequestChanges(d) {
+  if (!d || typeof d !== 'object' || d.kind !== 'requestChanges') return null;
+  if (!isNonEmptyString(d.sessionId)) return null;
+  return { kind: 'requestChanges', sessionId: d.sessionId };
+}
+
+/** 校验下行"注入 composer"（Add to DSH 既有通道，纳入统一下行分发） */
+export function parseInjectComposer(d) {
+  if (!d || typeof d !== 'object' || d.kind !== 'injectComposer') return null;
+  if (typeof d.text !== 'string') return null;
+  return { kind: 'injectComposer', text: d.text };
+}
+
+/**
+ * 下行统一入口：按 kind 分发到对应校验器（client.js 的唯一下行分发点）。
+ * 未知 kind 返回 null → 静默丢弃（版本混装兜底）。新增下行消息只需在这里加一个 case，
+ * 不必在 client.js 里维护"逐条尝试"的分支链——那正是误收的温床。
+ * @returns {null | object} 已校验并归一的 { kind, ...payload }
+ */
+export function parseDownlinkMessage(d) {
+  if (!d || typeof d !== 'object') return null;
+  switch (d.kind) {
+    case 'injectComposer':
+      return parseInjectComposer(d);
+    case 'quickEditSubmit':
+      return parseQuickEditSubmit(d);
+    case 'approvalDecision':
+      return parseApprovalDecision(d);
+    case 'questionAnswer':
+      return parseQuestionAnswer(d);
+    case 'requestChanges':
+      return parseRequestChanges(d);
+    default:
+      return null; // 未知 kind：静默丢弃
+  }
 }

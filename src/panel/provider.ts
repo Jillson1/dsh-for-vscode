@@ -2,7 +2,7 @@
 import * as vscode from 'vscode';
 import { randomUUID } from 'node:crypto';
 import { ServiceManager } from '../service/manager';
-import { handleBridgeMessage } from '../bridge/host';
+import { handleBridgeMessage, type BridgeUplinkEvent } from '../bridge/host';
 import { DiffService } from '../bridge/diff-service';
 import { t } from '../i18n';
 import {
@@ -11,6 +11,7 @@ import {
   disconnectedPage,
   stoppedPage,
   readyPage,
+  type PanelDownlink,
   type PanelMessage,
   type PageCtx,
 } from './html';
@@ -35,11 +36,16 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
   constructor(
     private manager: ServiceManager,
     private onFirstOpen?: () => void,
-    private onBridgeAck?: (ok: boolean) => void,
+    private onBridgeAck?: (ok: boolean, capabilities?: string[]) => void,
     private workspaceRoot: () => string | undefined = () => undefined,
     private bridgeEnabled: () => boolean = () => true,
     /** A 组修改服务（高亮/撤销/diff 视图；两个面板共享同一单例） */
     private diffService?: DiffService,
+    /**
+     * 交互增强（bridge 0.4.0）上行消息落点：T0 由入口注入日志实现（打桩），
+     * 后续阶段（F1/F6/F7/F8/F9）改注入真实服务或在此分发。
+     */
+    private logBridgeEvent?: (event: BridgeUplinkEvent) => void,
   ) {
     // 订阅状态变化，重绘面板（iframe 与占位页由状态驱动，无白屏路径）
     manager.onChange(() => this.render());
@@ -67,8 +73,17 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
    * （面板未打开/隐藏），调用方据此提示用户。
    */
   injectComposer(text: string): boolean {
+    return this.postToPage({ type: 'bridgeInjectComposer', text });
+  }
+
+  /**
+   * 向 DSH 页面投递下行消息（bridge 0.4.0 通用入口）。
+   * 顶层握手脚本按 type 翻译成桥接 kind 转给 iframe，桥接校验后加 `dsh-file-jump:` 前缀交给插件。
+   * 仅当面板可见且 webview 就绪时投递；返回 false 表示当前不可投递，调用方据此提示用户。
+   */
+  postToPage(msg: PanelDownlink): boolean {
     if (!this.view || this.view.visible !== true) return false;
-    void this.view.webview.postMessage({ type: 'bridgeInjectComposer', text });
+    void this.view.webview.postMessage(msg);
     return true;
   }
 
@@ -107,50 +122,67 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
         break;
       case 'bridgeOpenExternal':
       case 'bridgeOpenFile':
-        // 桥接跳转消息统一走 host 的 handleBridgeMessage（内部分流外链/文件，做白名单与路径解析）
-        void handleBridgeMessage(msg, {
-          openExternal: (u) => vscode.env.openExternal(vscode.Uri.parse(u)),
-          // showTextDocument 返回 TextEditor，而依赖约定返回 Thenable<void>：用 async 包装丢弃返回值
-          openTextDocument: async (p) => {
-            await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
-          },
-          // edit 场景定位 oldText：扩展宿主读文件（有完整 Node 权限），indexOf 算起始行
-          readFileText: async (p) => {
-            const { promises: fs } = await import('node:fs');
-            return fs.readFile(p, 'utf8');
-          },
-          // edit 场景精确跳行：打开后 revealRange 定位到 1-based 修改起始行并高亮居中
-          revealLine: async (p, line) => {
-            const editor = await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
-            const doc = editor.document;
-            const start = new vscode.Position(line - 1, 0);
-            // 行号越界由 validateRange 归一：文档末尾行数不足时定位到最后一行
-            const end = doc.lineAt(Math.min(line - 1, doc.lineCount - 1)).range.end;
-            const range = doc.validateRange(new vscode.Range(start, end));
-            editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-            editor.selection = new vscode.Selection(range.start, range.end);
-          },
-          // A 组：applied diff → 修改服务记录（高亮 + 撤销栈）
-          recordDiff: async (d) => {
-            await this.diffService?.record(d);
-          },
-          // edit 卡片点击的精确跳行：走修改记录（oldText → newText 定位），
-          // 比直接 indexOf 改前片段可靠（改前片段落盘后已不在文件里）
-          resolveEditLine: async (p, oldText) => this.diffService?.lineForOldText(p, oldText),
-          // 用户提示统一走 vscode.window.showWarningMessage（host 层不 import vscode，保持纯逻辑可单测）
-          showWarning: (m) => void vscode.window.showWarningMessage(m),
-          workspaceRoot: this.workspaceRoot(), // 工作区根目录：openFile 相对路径解析的兜底基准
-        });
+      case 'bridgeSessionState':
+      case 'bridgeApprovalRequest':
+      case 'bridgeQuestionRequest':
+      case 'bridgeChangesSync':
+      case 'bridgeCheckpointsReady':
+        // 桥接消息统一走 host 的 handleBridgeMessage（内部分流：外链/文件跳转落地为 VS Code
+        // 动作；交互增强上行消息 T0 落到 logBridgeEvent 打桩）。
+        void handleBridgeMessage(msg, this.bridgeDeps());
         break;
       case 'bridgeDiffApplied':
         // A 组：DSH 插件广播的 applied diff → 修改服务记录（高亮 + 撤销栈）
         void this.diffService?.record(msg);
         break;
       case 'bridgeAck':
-        // 握手回执：通知注入的回调（Task 7 据此评估桥接状态）
-        this.onBridgeAck?.(msg.ok);
+        // 握手回执：通知注入的回调（Task 7 据此评估桥接状态；0.4.0 起附带能力表）
+        this.onBridgeAck?.(msg.ok, msg.capabilities);
         break;
     }
+  }
+
+  /**
+   * 桥接消息处理依赖（生产实现）。
+   * 抽成方法的原因：外链/文件跳转与交互增强上行消息共用同一套 deps，
+   * 内联两份会让后续阶段加消息时出现"两处必须同步改"的隐性耦合。
+   */
+  private bridgeDeps(): Parameters<typeof handleBridgeMessage>[1] {
+    return {
+      openExternal: (u) => vscode.env.openExternal(vscode.Uri.parse(u)),
+      // showTextDocument 返回 TextEditor，而依赖约定返回 Thenable<void>：用 async 包装丢弃返回值
+      openTextDocument: async (p) => {
+        await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
+      },
+      // edit 场景定位 oldText：扩展宿主读文件（有完整 Node 权限），indexOf 算起始行
+      readFileText: async (p) => {
+        const { promises: fs } = await import('node:fs');
+        return fs.readFile(p, 'utf8');
+      },
+      // edit 场景精确跳行：打开后 revealRange 定位到 1-based 修改起始行并高亮居中
+      revealLine: async (p, line) => {
+        const editor = await vscode.window.showTextDocument(vscode.Uri.file(p), { preview: false });
+        const doc = editor.document;
+        const start = new vscode.Position(line - 1, 0);
+        // 行号越界由 validateRange 归一：文档末尾行数不足时定位到最后一行
+        const end = doc.lineAt(Math.min(line - 1, doc.lineCount - 1)).range.end;
+        const range = doc.validateRange(new vscode.Range(start, end));
+        editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        editor.selection = new vscode.Selection(range.start, range.end);
+      },
+      // A 组：applied diff → 修改服务记录（高亮 + 撤销栈）
+      recordDiff: async (d) => {
+        await this.diffService?.record(d);
+      },
+      // edit 卡片点击的精确跳行：走修改记录（oldText → newText 定位），
+      // 比直接 indexOf 改前片段可靠（改前片段落盘后已不在文件里）
+      resolveEditLine: async (p, oldText) => this.diffService?.lineForOldText(p, oldText),
+      // 用户提示统一走 vscode.window.showWarningMessage（host 层不 import vscode，保持纯逻辑可单测）
+      showWarning: (m) => void vscode.window.showWarningMessage(m),
+      // 交互增强上行消息落点（T0：入口注入日志实现）
+      logBridgeEvent: (e) => this.logBridgeEvent?.(e),
+      workspaceRoot: this.workspaceRoot(), // 工作区根目录：openFile 相对路径解析的兜底基准
+    };
   }
 
   /** 剪贴板桥接：扩展宿主写系统剪贴板，完成后回执给 webview（由顶层脚本转发给 iframe） */

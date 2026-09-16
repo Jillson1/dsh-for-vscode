@@ -25,8 +25,12 @@ export function buildDiffAppliedMessage(payload: unknown): {
   tool?: string;
 } | null;
 
-/** 构造"工作区同步回执"消息（bridgeAck，path 可选） */
-export function buildSyncWorkspaceAck(ok: boolean, path?: string): { kind: 'bridgeAck'; ok: boolean; path?: string };
+/** 构造"工作区同步回执"消息（bridgeAck，path 可选；capabilities 为能力表，可选） */
+export function buildSyncWorkspaceAck(
+  ok: boolean,
+  path?: string,
+  capabilities?: string[],
+): { kind: 'bridgeAck'; ok: boolean; path?: string; capabilities?: string[] };
 
 /** 构造"复制文本"消息（iframe 页面 → 父页面 → 扩展 → 系统剪贴板） */
 export function buildCopyTextMessage(text: string, requestId: string): { kind: 'copyText'; text: string; requestId: string };
@@ -77,3 +81,137 @@ export function buildReadTextAck(
   ok: boolean,
   text?: string,
 ): { kind: 'readTextAck'; requestId: string; ok: boolean; text?: string };
+
+// ============================================================================
+// 交互增强地基（bridge 0.4.0）：能力表 + 新消息构造/校验（与 core.js 一一对应）
+// ============================================================================
+
+/** 桥接具备的能力表（握手 bridgeAck 下发，扩展据此门控命令显隐） */
+export const BRIDGE_CAPABILITIES: string[];
+
+/** 上行消息投递事件名（插件 dispatch、桥接监听；两侧必须一致） */
+export const UPLINK_EVENT: string;
+
+/** 会话状态消息（F7） */
+export interface SessionStateMsg {
+  kind: 'sessionState';
+  sessionId: string;
+  running: boolean;
+  turn: number;
+  pending: number;
+}
+
+/** 审批请求消息（F6） */
+export interface ApprovalRequestMsg {
+  kind: 'approvalRequest';
+  sessionId: string;
+  approvalId: string;
+  toolName: string;
+  callId?: string;
+  reason?: string;
+}
+
+/** 提问请求消息（F8） */
+export interface QuestionRequestMsg {
+  kind: 'questionRequest';
+  sessionId: string;
+  questionId: string;
+  questions: object[];
+}
+
+/** 变更记录（桥接子集；字段与扩展 ChangeRecord 对齐） */
+export interface ChangeRecordMsg {
+  callId: string;
+  path: string;
+  absPath: string;
+  sessionId?: string;
+  turn?: number;
+  tool?: 'edit' | 'write';
+  oldText?: string;
+  newText?: string;
+  time?: number;
+  source?: 'relay' | 'replay';
+  fileHashAtRecord?: string;
+}
+
+/** 变更同步消息（F1） */
+export interface ChangesSyncMsg {
+  kind: 'changesSync';
+  sessionId: string;
+  records: ChangeRecordMsg[];
+}
+
+/** 检查点回执消息（F9） */
+export interface CheckpointsReadyMsg {
+  kind: 'checkpointsReady';
+  ok: boolean;
+  sessionId?: string;
+  error?: string;
+}
+
+/** 构造"会话状态"消息；缺 sessionId 返回 null */
+export function buildSessionStateMessage(p: unknown): SessionStateMsg | null;
+
+/** 构造"审批请求"消息；sessionId/approvalId/toolName 任一缺失返回 null */
+export function buildApprovalRequestMessage(p: unknown): ApprovalRequestMsg | null;
+
+/** 构造"提问请求"消息；缺 sessionId/questionId 返回 null */
+export function buildQuestionRequestMessage(p: unknown): QuestionRequestMsg | null;
+
+/** 构造"变更同步"消息；缺 sessionId 或 records 非数组返回 null */
+export function buildChangesSyncMessage(p: unknown): ChangesSyncMsg | null;
+
+/** 构造"检查点回执"消息；ok 非布尔返回 null */
+export function buildCheckpointsReadyMessage(p: unknown): CheckpointsReadyMsg | null;
+
+/** 上行统一入口：{ kind, payload } → 桥接消息；未知 kind / 形状非法返回 null */
+export function buildBridgeUplinkMessage(detail: unknown):
+  | SessionStateMsg
+  | ApprovalRequestMsg
+  | QuestionRequestMsg
+  | ChangesSyncMsg
+  | CheckpointsReadyMsg
+  | null;
+
+/** 校验下行"就地指令提交"（F11） */
+export function parseQuickEditSubmit(d: unknown): {
+  kind: 'quickEditSubmit';
+  path: string;
+  startLine: number;
+  endLine: number;
+  instruction: string;
+} | null;
+
+/** 校验下行"审批决策"（F6）；outcome 仅接受 allowed-once / rejected */
+export function parseApprovalDecision(d: unknown): {
+  kind: 'approvalDecision';
+  sessionId: string;
+  approvalId: string;
+  outcome: 'allowed-once' | 'rejected';
+} | null;
+
+/** 校验下行"提问回答"（F8） */
+export function parseQuestionAnswer(d: unknown): {
+  kind: 'questionAnswer';
+  sessionId: string;
+  questionId: string;
+  answer: unknown;
+} | null;
+
+/** 校验下行"请求重放变更"（F1） */
+export function parseRequestChanges(d: unknown): { kind: 'requestChanges'; sessionId: string } | null;
+
+/** 校验下行"注入 composer"（Add to DSH 既有通道） */
+export function parseInjectComposer(d: unknown): { kind: 'injectComposer'; text: string } | null;
+
+/**
+ * 下行统一入口：按 kind 分发到对应校验器（client.js 的唯一下行分发点）。
+ * 各 parse* 均先校验 kind，避免不同消息被宽松解析器互相误收。
+ */
+export function parseDownlinkMessage(d: unknown):
+  | { kind: 'injectComposer'; text: string }
+  | { kind: 'quickEditSubmit'; path: string; startLine: number; endLine: number; instruction: string }
+  | { kind: 'approvalDecision'; sessionId: string; approvalId: string; outcome: 'allowed-once' | 'rejected' }
+  | { kind: 'questionAnswer'; sessionId: string; questionId: string; answer: unknown }
+  | { kind: 'requestChanges'; sessionId: string }
+  | null;

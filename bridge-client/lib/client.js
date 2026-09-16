@@ -455,7 +455,8 @@ window.__ModuleLoader__.load({
         // 回执统一用 core.js 的 buildSyncWorkspaceAck 构造，形状与工作区同步回执一致
         // （{ kind: 'bridgeAck', ok }，不带 token 字段）；顶层 webview 靠 origin + source
         // 校验消息来源，按 { kind: 'bridgeAck', ok } 解析，避免同 kind 两种形状。
-        parent.postMessage(buildSyncWorkspaceAck(true), "*");
+        // 0.4.0 起额外携带 capabilities 能力表：扩展据此门控命令显隐（最小版能力协商 E1）。
+        parent.postMessage(buildSyncWorkspaceAck(true, undefined, BRIDGE_CAPABILITIES), "*");
         return;
       }
       // 剪贴板写回执：resolve / reject 对应的 writeText Promise
@@ -476,11 +477,14 @@ window.__ModuleLoader__.load({
         }
         return;
       }
-      // 父页面下行注入 composer（右键 "Add to DSH"）：转发给同 iframe 的 dsh-file-jump 插件。
-      // 两插件是独立 bundle 无直接依赖，用 window.postMessage 解耦（* 目标同文档，无跨源风险）。
-      if (d.kind === "injectComposer" && typeof d.text === "string") {
-        window.postMessage({ kind: "dsh-file-jump:injectComposer", text: d.text }, "*");
-        return;
+      // —— 下行（0.4.0）：统一按 kind 分发（含既有的 injectComposer / Add to DSH） ——
+      // 校验与归一走 core.js 的 parseDownlinkMessage（与单测同一份源码），再统一加
+      // `dsh-file-jump:` 命名空间前缀转给同 iframe 的插件（两个 bundle 无直接依赖）。
+      // 用单一分发点而非"逐条尝试"的分支链：后者会被宽松解析器互相误收
+      // （实测踩坑：非法 outcome 的 approvalDecision 曾被 requestChanges 分支收走并转发）。
+      const downlink = parseDownlinkMessage(d);
+      if (downlink) {
+        window.postMessage({ ...downlink, kind: "dsh-file-jump:" + downlink.kind }, "*");
       }
     }
 
@@ -495,9 +499,23 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // —— 交互增强（0.4.0）上行统一转发 ——
+    // 插件用 window.dispatchEvent(new CustomEvent(UPLINK_EVENT, { detail: { kind, payload } }))
+    // 投递新消息（F1 变更同步 / F6 审批 / F7 状态 / F8 提问 / F9 检查点回执）；
+    // 桥接按 core.js 的白名单构造器校验并归一后转发父页面。未握手不转发，
+    // 未知 kind 或形状非法一律静默丢弃（桥接与插件版本混装时的兜底）。
+    function installUplinkRelay() {
+      window.addEventListener(UPLINK_EVENT, (e) => {
+        if (bridgeToken === "") return;
+        const msg = buildBridgeUplinkMessage(e.detail);
+        if (msg) parent.postMessage(msg, "*");
+      });
+    }
+
     // —— 入口：立即绑定 DOM 拦截与父消息监听，等待父页面握手 ——
     bindLinkInterception();
     installDiffRelay();
+    installUplinkRelay();
     window.addEventListener("message", onParentMessage);
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("contextmenu", onContextMenu, true);

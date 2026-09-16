@@ -93,3 +93,42 @@ test('CSP 声明 frame-src 与 script-src nonce', () => {
   assert.ok(html.includes('frame-src http://127.0.0.1:3080'));
   assert.ok(html.includes("script-src 'nonce-abc123'"));
 });
+
+// —— 交互增强地基（bridge 0.4.0）：握手 capabilities + 五上四下消息分支 ——
+
+test('readyPage 握手回执透传 capabilities（0.4.0 能力表）', () => {
+  const html = readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok123', enabled: true });
+  // bridgeAck 分支应读取 d.capabilities 并随 bridgeAck 上报给扩展（旧桥接不带字段 → undefined）
+  assert.ok(html.includes('d.capabilities'), '握手回执应读取 capabilities');
+  assert.ok(html.includes("type: 'bridgeAck'"), '应上报 bridgeAck');
+  assert.ok(html.includes('capabilities: caps'), 'bridgeAck 应携带归一后的能力表');
+});
+
+test('readyPage 握手脚本包含交互增强上行分支（5 条）', () => {
+  const html = readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok123', enabled: true });
+  // 上行：iframe → 扩展；kind 为桥接 core.js 的构造产物，type 为扩展侧 PanelMessage
+  for (const [kind, type] of [
+    ['sessionState', 'bridgeSessionState'],
+    ['approvalRequest', 'bridgeApprovalRequest'],
+    ['questionRequest', 'bridgeQuestionRequest'],
+    ['changesSync', 'bridgeChangesSync'],
+    ['checkpointsReady', 'bridgeCheckpointsReady'],
+  ]) {
+    assert.ok(html.includes(`kind === '${kind}'`), `应转发行 ${kind} 上行消息`);
+    assert.ok(html.includes(`type: '${type}'`), `应向扩展宿主发送 ${type}`);
+  }
+});
+
+test('readyPage 握手脚本包含交互增强下行分支（4 条）', () => {
+  const html = readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok123', enabled: true });
+  // 下行：扩展 → iframe；type 为扩展侧 PanelDownlink，kind 为桥接转发给插件的形状
+  for (const [type, kind] of [
+    ['bridgeQuickEditSubmit', 'quickEditSubmit'],
+    ['bridgeApprovalDecision', 'approvalDecision'],
+    ['bridgeQuestionAnswer', 'questionAnswer'],
+    ['bridgeRequestChanges', 'requestChanges'],
+  ]) {
+    assert.ok(html.includes(`type === '${type}'`), `应接收扩展宿主的 ${type}`);
+    assert.ok(html.includes(`kind: '${kind}'`), `应把下行消息转发为 iframe 的 ${kind}`);
+  }
+});

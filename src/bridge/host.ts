@@ -6,6 +6,19 @@
 import { isAbsolute, resolve } from 'node:path';
 import type { PanelMessage } from '../panel/html';
 
+/**
+ * 交互增强（bridge 0.4.0）上行事件：由桥接转发、扩展侧消费的新消息。
+ * T0 阶段这些事件只落到 `logBridgeEvent`（打日志打桩），后续阶段各自接管：
+ * sessionState → F7 状态栏；approvalRequest → F6 审批路由；questionRequest → F8 提问；
+ * changesSync → F1 变更账本；checkpointsReady → F9 检查点恢复回执。
+ */
+export type BridgeUplinkEvent =
+  | { name: 'sessionState'; sessionId: string; running: boolean; turn: number; pending: number }
+  | { name: 'approvalRequest'; sessionId: string; approvalId: string; toolName: string; callId?: string; reason?: string }
+  | { name: 'questionRequest'; sessionId: string; questionId: string; questions: unknown[] }
+  | { name: 'changesSync'; sessionId: string; records: unknown[] }
+  | { name: 'checkpointsReady'; ok: boolean; sessionId?: string; error?: string };
+
 /** 桥接消息处理依赖（生产接 vscode API，测试注入假实现） */
 export interface BridgeMessageDeps {
   /** 打开外部链接（生产接 vscode.env.openExternal，返回是否成功） */
@@ -31,6 +44,11 @@ export interface BridgeMessageDeps {
   recordDiff?(diff: { path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string; tool?: string }): void | Promise<void>;
   /** 弹用户可见提示（生产接 vscode.window.showWarningMessage，测试注入假实现以断言） */
   showWarning(msg: string): void;
+  /**
+   * 交互增强（bridge 0.4.0）上行消息落点：T0 只打日志打桩，后续由 F1/F6/F7/F8/F9 接管。
+   * 可选：未注入时静默忽略（旧调用方 / 降级路径仍可工作）。
+   */
+  logBridgeEvent?(event: BridgeUplinkEvent): void;
   /** 工作区根目录（相对路径解析的兜底基准，生产由扩展入口注入） */
   workspaceRoot?: string;
 }
@@ -181,6 +199,56 @@ export async function handleBridgeMessage(msg: PanelMessage, deps: BridgeMessage
       // 记录失败（读文件 IO 等）不影响主流程：仅提示，不打断
       deps.showWarning(`无法记录修改：${msg.path}（${errSummary(err)}）`);
     }
+    return;
+  }
+  // —— 交互增强（bridge 0.4.0）上行：T0 仅落日志打桩（后续阶段各自接管真实行为）——
+  // 说明：这些分支刻意保持"无副作用"，使 0.4.0 骨架可以独立验证（握手带 capabilities、
+  // 消息可达），而不会在 F1/F6/F7/F8/F9 尚未实现时产生半成品行为。
+  if (msg.type === 'bridgeSessionState') {
+    deps.logBridgeEvent?.({
+      name: 'sessionState',
+      sessionId: msg.sessionId,
+      running: msg.running,
+      turn: msg.turn,
+      pending: msg.pending,
+    });
+    return;
+  }
+  if (msg.type === 'bridgeApprovalRequest') {
+    deps.logBridgeEvent?.({
+      name: 'approvalRequest',
+      sessionId: msg.sessionId,
+      approvalId: msg.approvalId,
+      toolName: msg.toolName,
+      callId: msg.callId,
+      reason: msg.reason,
+    });
+    return;
+  }
+  if (msg.type === 'bridgeQuestionRequest') {
+    deps.logBridgeEvent?.({
+      name: 'questionRequest',
+      sessionId: msg.sessionId,
+      questionId: msg.questionId,
+      questions: msg.questions,
+    });
+    return;
+  }
+  if (msg.type === 'bridgeChangesSync') {
+    deps.logBridgeEvent?.({
+      name: 'changesSync',
+      sessionId: msg.sessionId,
+      records: msg.records,
+    });
+    return;
+  }
+  if (msg.type === 'bridgeCheckpointsReady') {
+    deps.logBridgeEvent?.({
+      name: 'checkpointsReady',
+      ok: msg.ok,
+      sessionId: msg.sessionId,
+      error: msg.error,
+    });
     return;
   }
 }

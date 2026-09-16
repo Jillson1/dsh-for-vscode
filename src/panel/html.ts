@@ -4,7 +4,7 @@ import type { MsgKey } from '../i18n';
 /** 翻译函数签名（把 i18n.t 传入模板） */
 export type T = (key: MsgKey, vars?: Record<string, string | number>) => string;
 
-/** 面板内按钮发回扩展的消息类型（含桥接跳转与握手回执三类） */
+/** 面板内按钮发回扩展的消息类型（含桥接跳转、握手回执与交互增强上行消息） */
 export type PanelMessage =
   | { type: 'retry' }
   | { type: 'reconnect' }
@@ -20,7 +20,25 @@ export type PanelMessage =
   | { type: 'bridgeReadText'; requestId: string }
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
   | { type: 'bridgeInjectComposer'; text: string }
-  | { type: 'bridgeAck'; ok: boolean };
+  | { type: 'bridgeAck'; ok: boolean; capabilities?: string[] }
+  // —— 交互增强（bridge 0.4.0）上行消息：T0 只做落点（host 打日志），后续阶段各自接管 ——
+  | { type: 'bridgeSessionState'; sessionId: string; running: boolean; turn: number; pending: number }
+  | { type: 'bridgeApprovalRequest'; sessionId: string; approvalId: string; toolName: string; callId?: string; reason?: string }
+  | { type: 'bridgeQuestionRequest'; sessionId: string; questionId: string; questions: unknown[] }
+  | { type: 'bridgeChangesSync'; sessionId: string; records: unknown[] }
+  | { type: 'bridgeCheckpointsReady'; ok: boolean; sessionId?: string; error?: string };
+
+/**
+ * 扩展 → 页面（下行）消息类型（bridge 0.4.0）。
+ * 由 provider.postToPage 投递到顶层 webview，握手脚本按 type 翻译成桥接 kind 转给 iframe，
+ * 桥接再校验并加 `dsh-file-jump:` 前缀交给插件。T0 定义形状，调用方在 F6/F8/F11 接入。
+ */
+export type PanelDownlink =
+  | { type: 'bridgeInjectComposer'; text: string }
+  | { type: 'bridgeQuickEditSubmit'; path: string; startLine: number; endLine: number; instruction: string }
+  | { type: 'bridgeApprovalDecision'; sessionId: string; approvalId: string; outcome: 'allowed-once' | 'rejected' }
+  | { type: 'bridgeQuestionAnswer'; sessionId: string; questionId: string; answer: unknown }
+  | { type: 'bridgeRequestChanges'; sessionId: string };
 
 /** 渲染上下文 */
 export interface PageCtx {
@@ -110,10 +128,52 @@ if (iframeEl) {
       iframeEl.contentWindow.postMessage({ kind: 'injectComposer', text: d.text }, iframeSrc);
       return;
     }
+    // —— 下行（bridge 0.4.0）：交互增强新消息 → 转发给 iframe ——
+    // 由 bridge client 用 core.js 的 parse* 校验、加 \`dsh-file-jump:\` 前缀后交给插件。
+    if (d && d.type === 'bridgeQuickEditSubmit' && typeof d.path === 'string') {
+      iframeEl.contentWindow.postMessage({
+        kind: 'quickEditSubmit',
+        path: d.path,
+        startLine: d.startLine,
+        endLine: d.endLine,
+        instruction: d.instruction,
+      }, iframeSrc);
+      return;
+    }
+    if (d && d.type === 'bridgeApprovalDecision' && typeof d.sessionId === 'string' && typeof d.approvalId === 'string') {
+      iframeEl.contentWindow.postMessage({
+        kind: 'approvalDecision',
+        sessionId: d.sessionId,
+        approvalId: d.approvalId,
+        outcome: d.outcome,
+      }, iframeSrc);
+      return;
+    }
+    if (d && d.type === 'bridgeQuestionAnswer' && typeof d.sessionId === 'string' && typeof d.questionId === 'string') {
+      iframeEl.contentWindow.postMessage({
+        kind: 'questionAnswer',
+        sessionId: d.sessionId,
+        questionId: d.questionId,
+        answer: d.answer,
+      }, iframeSrc);
+      return;
+    }
+    if (d && d.type === 'bridgeRequestChanges' && typeof d.sessionId === 'string') {
+      iframeEl.contentWindow.postMessage({ kind: 'requestChanges', sessionId: d.sessionId }, iframeSrc);
+      return;
+    }
     // —— 上行：iframe 发来的消息，origin + source 双重校验 ——
     if (e.origin !== ALLOWED_ORIGIN || e.source !== iframeEl.contentWindow) return;
     // 握手回执：统一形状 { kind:'bridgeAck', ok }（不带 token 字段），只读 ok
-    if (d && d.kind === 'bridgeAck') { bridgeAcked = true; vscode.postMessage({ type: 'bridgeAck', ok: d.ok === true }); return; }
+    if (d && d.kind === 'bridgeAck') {
+      bridgeAcked = true;
+      // capabilities（0.4.0）：桥接能力表，扩展据此门控命令显隐（旧桥接不带此字段 → undefined）
+      const caps = Array.isArray(d.capabilities)
+        ? d.capabilities.filter(function (c) { return typeof c === 'string'; })
+        : undefined;
+      vscode.postMessage({ type: 'bridgeAck', ok: d.ok === true, capabilities: caps });
+      return;
+    }
     // 打开外链：转发给扩展 → vscode.env.openExternal
     if (d && d.kind === 'openExternal' && typeof d.url === 'string') { vscode.postMessage({ type: 'bridgeOpenExternal', url: d.url }); return; }
     // 打开文件：转发给扩展 → showTextDocument（携带可选 cwd / line / oldText）
@@ -143,6 +203,56 @@ if (iframeEl) {
           : [],
         callId: typeof d.callId === 'string' ? d.callId : '',
         tool: typeof d.tool === 'string' ? d.tool : undefined,
+      });
+      return;
+    }
+    // —— 交互增强（bridge 0.4.0）上行：会话状态 / 审批 / 提问 / 变更同步 / 检查点回执 ——
+    // 形状已由桥接 core.js 的白名单构造器保证；此处只做最必要的字段校验（纵深防御），
+    // 缺字段的消息直接丢弃，不让半成品数据进扩展。
+    if (d && d.kind === 'sessionState' && typeof d.sessionId === 'string') {
+      vscode.postMessage({
+        type: 'bridgeSessionState',
+        sessionId: d.sessionId,
+        running: d.running === true,
+        turn: typeof d.turn === 'number' ? d.turn : 0,
+        pending: typeof d.pending === 'number' ? d.pending : 0,
+      });
+      return;
+    }
+    if (d && d.kind === 'approvalRequest' && typeof d.sessionId === 'string' && typeof d.approvalId === 'string' && typeof d.toolName === 'string') {
+      vscode.postMessage({
+        type: 'bridgeApprovalRequest',
+        sessionId: d.sessionId,
+        approvalId: d.approvalId,
+        toolName: d.toolName,
+        callId: typeof d.callId === 'string' ? d.callId : undefined,
+        reason: typeof d.reason === 'string' ? d.reason : undefined,
+      });
+      return;
+    }
+    if (d && d.kind === 'questionRequest' && typeof d.sessionId === 'string' && typeof d.questionId === 'string') {
+      vscode.postMessage({
+        type: 'bridgeQuestionRequest',
+        sessionId: d.sessionId,
+        questionId: d.questionId,
+        questions: Array.isArray(d.questions) ? d.questions : [],
+      });
+      return;
+    }
+    if (d && d.kind === 'changesSync' && typeof d.sessionId === 'string') {
+      vscode.postMessage({
+        type: 'bridgeChangesSync',
+        sessionId: d.sessionId,
+        records: Array.isArray(d.records) ? d.records : [],
+      });
+      return;
+    }
+    if (d && d.kind === 'checkpointsReady' && typeof d.ok === 'boolean') {
+      vscode.postMessage({
+        type: 'bridgeCheckpointsReady',
+        ok: d.ok,
+        sessionId: typeof d.sessionId === 'string' ? d.sessionId : undefined,
+        error: typeof d.error === 'string' ? d.error : undefined,
       });
       return;
     }

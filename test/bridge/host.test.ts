@@ -350,3 +350,69 @@ test('handleBridgeMessage diffApplied recordDiff 抛错时提示用户', async (
   assert.ok(warnings[0].includes('/proj/a.ts'), `提示应含路径，实际：${warnings[0]}`);
   assert.ok(warnings[0].includes('EIO'), `提示应含错误摘要，实际：${warnings[0]}`);
 });
+
+// —— 交互增强地基（bridge 0.4.0）：新上行消息落到 logBridgeEvent ——
+// T0 阶段这些事件只打桩（记日志），因此断言"事件名 + 关键字段原样送达"，
+// 并确认未注入 logBridgeEvent 时不抛异常（降级路径）。
+
+/** 构造只带 logBridgeEvent 的 deps（新上行消息不触达其余依赖，给空实现即可） */
+function logOnlyDeps(events: unknown[]) {
+  return {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    showWarning: () => {},
+    logBridgeEvent: (e: unknown) => { events.push(e); },
+  };
+}
+
+test('handleBridgeMessage sessionState 落到 logBridgeEvent', async () => {
+  const events: unknown[] = [];
+  await handleBridgeMessage(
+    { type: 'bridgeSessionState', sessionId: 's1', running: true, turn: 3, pending: 1 },
+    logOnlyDeps(events),
+  );
+  assert.deepEqual(events, [{ name: 'sessionState', sessionId: 's1', running: true, turn: 3, pending: 1 }]);
+});
+
+test('handleBridgeMessage approvalRequest 落到 logBridgeEvent（可选字段缺省为 undefined）', async () => {
+  const events: unknown[] = [];
+  await handleBridgeMessage(
+    { type: 'bridgeApprovalRequest', sessionId: 's1', approvalId: 'a1', toolName: 'bash' },
+    logOnlyDeps(events),
+  );
+  assert.deepEqual(events, [
+    { name: 'approvalRequest', sessionId: 's1', approvalId: 'a1', toolName: 'bash', callId: undefined, reason: undefined },
+  ]);
+});
+
+test('handleBridgeMessage questionRequest / changesSync / checkpointsReady 落到 logBridgeEvent', async () => {
+  const events: unknown[] = [];
+  const deps = logOnlyDeps(events);
+  await handleBridgeMessage({ type: 'bridgeQuestionRequest', sessionId: 's1', questionId: 'q1', questions: [{ id: 'x' }] }, deps);
+  await handleBridgeMessage({ type: 'bridgeChangesSync', sessionId: 's1', records: [{ callId: 'c1' }] }, deps);
+  await handleBridgeMessage({ type: 'bridgeCheckpointsReady', ok: true, sessionId: 's1' }, deps);
+  assert.equal(events.length, 3);
+  assert.deepEqual(events[0], { name: 'questionRequest', sessionId: 's1', questionId: 'q1', questions: [{ id: 'x' }] });
+  assert.deepEqual(events[1], { name: 'changesSync', sessionId: 's1', records: [{ callId: 'c1' }] });
+  assert.deepEqual(events[2], { name: 'checkpointsReady', ok: true, sessionId: 's1', error: undefined });
+});
+
+test('未注入 logBridgeEvent 时新上行消息静默忽略（降级不抛）', async () => {
+  // 旧调用方（未注入落点）收到新消息不应抛未处理异常，也不应触发任何用户提示
+  const warnings: string[] = [];
+  const deps = {
+    openExternal: async () => true,
+    openTextDocument: async () => {},
+    readFileText: async () => '',
+    revealLine: async () => {},
+    showWarning: (m: string) => { warnings.push(m); },
+  };
+  await handleBridgeMessage({ type: 'bridgeSessionState', sessionId: 's1', running: false, turn: 0, pending: 0 }, deps);
+  await handleBridgeMessage({ type: 'bridgeApprovalRequest', sessionId: 's1', approvalId: 'a1', toolName: 'bash' }, deps);
+  await handleBridgeMessage({ type: 'bridgeQuestionRequest', sessionId: 's1', questionId: 'q1', questions: [] }, deps);
+  await handleBridgeMessage({ type: 'bridgeChangesSync', sessionId: 's1', records: [] }, deps);
+  await handleBridgeMessage({ type: 'bridgeCheckpointsReady', ok: false }, deps);
+  assert.deepEqual(warnings, []);
+});

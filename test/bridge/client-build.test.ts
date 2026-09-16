@@ -32,6 +32,11 @@ test('buildBridgeClient 内联产物语法合法且不含 export/占位符残留
     assert.ok(code.includes('buildCopyTextMessage'), '产物应包含剪贴板桥接消息构造');
     assert.ok(code.includes('copyViaBridge'), '产物应包含 writeText 接管逻辑');
     assert.ok(code.includes('dsh-vscode-bridge'), '产物应包含包名 dsh-vscode-bridge');
+    // 交互增强地基（0.4.0）：新消息逻辑同样必须在生产产物里（源码单测绿 ≠ 产物可用）
+    assert.ok(code.includes('BRIDGE_CAPABILITIES'), '产物应包含能力表 BRIDGE_CAPABILITIES');
+    assert.ok(code.includes('installUplinkRelay'), '产物应包含上行统一转发 installUplinkRelay');
+    assert.ok(code.includes('buildBridgeUplinkMessage'), '产物应包含上行消息白名单构造器');
+    assert.ok(code.includes('parseQuickEditSubmit'), '产物应包含下行 quickEditSubmit 校验');
     // ③ 不含占位符（替换应已完成）
     assert.ok(!code.includes('/*__CORE_INLINE__*/'), '产物不应残留占位符');
     // ④ 不含 export 前缀残留（去 export 正则应生效）

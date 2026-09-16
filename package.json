@@ -2,7 +2,7 @@
   "name": "dsh-for-vscode",
   "displayName": "DSH for VS Code",
   "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位），右键文件/选区即可添加到 DSH 输入框",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "Jillson1",
   "icon": "assets/icon.png",
   "license": "MIT",
