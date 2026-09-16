@@ -16,3 +16,6 @@ tsconfig.json
 .gitignore
 README.zh.md
 CONTRIBUTING.md
+# 排障/提交用的临时文件（.tmp-*.ts / .tmp-*.json / .tmp-commit-msg.txt 等）绝不入包
+.tmp*
+**/.tmp*
