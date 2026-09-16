@@ -157,7 +157,7 @@ export class DiffService {
       if (this.stack.push(rec)) {
         // F1：写账本（持久化）。只有真正入栈的记录才记账，保证栈与账本条数一致。
         this.rememberInBook(rec, input, content);
-        this.applyDecoration(rec, content);
+        this.applyDecoration(rec);
       }
     }
     this.deps.log?.(`record: 完成，栈大小=${this.stack.size} 账本=${this.deps.book?.count() ?? '-'}`);
@@ -237,16 +237,10 @@ export class DiffService {
       if (!this.stack.push(rec)) continue;
       adopted += 1;
       if (this.lastSessionId === undefined) this.lastSessionId = r.sessionId;
-      // 异步定位（读文件 / 用已打开的内存文档）：文件未打开时只入栈，打开时由 refreshFile 补高亮
-      void (async () => {
-        try {
-          const editor = this.findEditor(rec.path);
-          const content = editor !== undefined ? editor.document.getText() : await this.deps.readFileText(rec.path);
-          this.applyDecoration(rec, content);
-        } catch {
-          this.deps.log?.(`adopt: 读取失败，仅入栈（${rec.path}）`);
-        }
-      })();
+      // 文件未打开时只入栈（applyDecoration 内部直接 return），打开时由 refreshFile 补高亮。
+      // 不再在这里读磁盘：装饰的定位基准必须是**编辑器的内存文档**（与 hover 同源），
+      // 用磁盘内容定位再往内存文档上画会错位。
+      this.applyDecoration(rec);
     }
     this.deps.log?.(`adopt: 采纳 ${adopted} 条账本记录，栈大小=${this.stack.size}`);
     return adopted;
@@ -271,37 +265,22 @@ export class DiffService {
     }
   }
 
-  /** 把一条记录的红绿行高亮落到可见编辑器（文件已打开则立即显示）。 */
-  private applyDecoration(rec: ModificationRecord, _content: string | null): void {
+  /**
+   * 新记录到达（record / adopt 两条路径）后刷新该文件的装饰。
+   *
+   * **按"该文件全部记录"整体重建，而不是只把这 1 条追加进去**——追加语义会留下
+   * 「已失效记录的旧装饰」：某条记录的 newText 被后续改动取代后，它已定位不到、hover 也查不到，
+   * 但先前 set 上去的绿色仍留在编辑区（真机现象：**整份文件全绿 + hover 无面板**）。
+   * 重建与 refreshFile 同源，让"新记录到达"与"刷新/切 tab"两条路径的结果完全一致——
+   * 这是本模块的核心不变式：**编辑区上画了什么，hover 就必须能查到什么**。
+   */
+  private applyDecoration(rec: ModificationRecord): void {
     const editor = this.findEditor(rec.path);
     if (!editor) {
       this.deps.log?.(`applyDecoration: 未找到已打开的编辑器（path=${rec.path}），等待打开时 refreshFile`);
       return; // 文件未打开：不抢占编辑器；打开时由 refreshFile 补高亮
     }
-    // 定位基准统一用**编辑器的内存文档**：与 refreshFile 同源。
-    // 之前用传入的 content（record 时刚从磁盘读的）会让"磁盘定位 + 内存高亮"错位（A 组踩过同类坑）。
-    const startLine = decorationTargetLine(editor.document.getText(), rec.newText);
-    if (startLine === null) {
-      // 定位失败**不回退占位行号**：那会把整片内容误标成新增（真机缺陷）。
-      // 该记录仍留在栈/账本/树里，只是不高亮——宁可无标记，也不要标错位置。
-      this.deps.log?.(
-        `applyDecoration: 跳过（newText 已不在文档中，不误标）path=${rec.path} newText=${rec.newText.slice(0, 30)}`,
-      );
-      return;
-    }
-    this.deps.log?.(`applyDecoration: 高亮 path=${rec.path} startLine=${startLine} newText=${rec.newText.slice(0, 30)}`);
-    this.highlightLines(rec, editor, startLine);
-  }
-
-  /** 在编辑器上按行级 diff 投影红/绿区间（Cursor 风格：新增绿、删除红）。 */
-  private highlightLines(rec: ModificationRecord, editor: vscode.TextEditor, startLine: number): void {
-    const handle = this.decorationHandle(rec.path);
-    const marks = mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine));
-    for (const mark of marks) {
-      this.pushLineMark(handle, editor, mark);
-    }
-    if (marks.some((m) => m.kind !== 'add')) this.addDeletedHint(handle, editor, startLine, deletedLines(rec.oldText, rec.newText));
-    this.applyAllDecorations(handle, editor);
+    this.refreshFile(rec.path);
   }
 
   /** 把红/绿两套 decoration 的区间应用到编辑器（push 只收集，此处才真正渲染）。 */
@@ -425,14 +404,23 @@ export class DiffService {
     handle.mod.ranges = [];
     this.disposeHints(handle);
     const content = editor.document.getText();
+    let drawn = 0;
     for (const rec of recs) {
-      const loc = locateNewText(content, rec.newText);
-      if (loc === null) continue; // newText 已被用户改写：该条不再高亮
-      const marks = mergeLineMarks(redGreenLines(rec.oldText, rec.newText, loc.line));
+      // 定位落到哪一行由 decorationTargetLine 统一裁决（与 hover 的命中判定同一条规则）：
+      // 定位不到（newText 已被改写/被后续改动取代）→ **跳过，不回退占位行号**。
+      // 回退会把整片内容误标成新增，而 hover 又查不到该记录（自相矛盾的界面）。
+      const startLine = decorationTargetLine(content, rec.newText);
+      if (startLine === null) continue;
+      drawn += 1;
+      const marks = mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine));
       for (const mark of marks) this.pushLineMark(handle, editor, mark);
-      if (marks.some((m) => m.kind !== 'add')) this.addDeletedHint(handle, editor, loc.line, deletedLines(rec.oldText, rec.newText));
+      if (marks.some((m) => m.kind !== 'add')) this.addDeletedHint(handle, editor, startLine, deletedLines(rec.oldText, rec.newText));
     }
     this.applyAllDecorations(handle, editor);
+    this.deps.log?.(
+      `refreshFile: path=${path} 记录 ${recs.length} 条 → 高亮 ${drawn} 条` +
+        (recs.length === drawn ? '' : `（跳过 ${recs.length - drawn} 条：newText 已不在文档中，不误标）`),
+    );
   }
 
   /** 对所有"当前可见且有记录"的文件重建高亮（编辑器可见集合变化时调用）。 */
