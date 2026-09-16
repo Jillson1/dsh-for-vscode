@@ -487,6 +487,31 @@ export function snapMarksToContent(
 }
 
 /**
+ * 一条记录在给定文档上**实际占据的行**（装饰绘制与 hover 命中判定的唯一口径）。
+ *
+ * 为什么必须共用：这两处曾经各写一份判定，装饰改成"吸附空行"之后 hover 仍在用未吸附的
+ * `redGreenLines` 结果判命中 → 红色画在第 21 行、hover 却去第 22 行找记录，
+ * 表现为**红色可见但悬停不出面板**（真机现象）。不变式由代码结构保证，而不是靠两处手工对齐：
+ * **编辑区上画了什么，hover 就必须能查到什么。**
+ *
+ * @param content 将要高亮的那个文档的内存文本
+ * @param rec     记录（只需 oldText / newText）
+ * @returns 该记录占用的行（1-based 升序）；newText 定位不到 → 空数组（不画，也不参与 hover）
+ */
+export function recordMarks(
+  content: string,
+  rec: { oldText: string; newText: string },
+): HighlightLine[] {
+  const startLine = decorationTargetLine(content, rec.newText);
+  if (startLine === null) return [];
+  return snapMarksToContent(
+    content,
+    mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine)),
+    startLine,
+  );
+}
+
+/**
  * 修改栈（内存）：按 callId 去重（同一次修改重复广播只记一条），支持按路径/全部撤销。
  * 纯数据容器，thread-safe 由调用方保证（扩展主线程单线程）。
  */

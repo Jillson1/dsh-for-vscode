@@ -25,6 +25,7 @@ import {
   userAppendedPart,
   decorationTargetLine,
   snapMarksToContent,
+  recordMarks,
   type AppliedDiffInput,
   type ModificationRecord,
 } from '../../src/bridge/diff-tracker';
@@ -468,6 +469,42 @@ test('snapMarksToContent CRLF 文档里的空行也认得出来', () => {
   const content = 'a\r\n\r\n标题\r\n';
   const out = snapMarksToContent(content, [{ line: 2, kind: 'del' as const }], 1);
   assert.equal(out[0]!.line, 1); // 第 2 行是空行 → 吸到第 1 行
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// recordMarks：装饰绘制与 hover 命中判定的**唯一口径**
+// 真机缺陷：装饰改成吸附空行后，hover 仍在用未吸附的结果判命中 →
+// 红色画在第 21 行、hover 却去第 22 行找记录 → "红色可见但悬停无面板"。
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('recordMarks 删除在末尾：返回吸附后的可见行（而非结尾空行）', () => {
+  // 真机 hunk：newText = "\n## 注意\n"（含 2 行被删内容）
+  const content = 'l1\nl2\n\n## 注意\n\n';
+  const rec = { oldText: '\n## 注意\n\n本条说明。\n只想清掉标记。', newText: '\n## 注意\n' };
+  const marks = recordMarks(content, rec);
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0]!.kind, 'del');
+  assert.equal(content.split('\n')[marks[0]!.line - 1], '## 注意'); // 必须是可见行，不能是空行
+});
+
+test('recordMarks 与 hover 命中判定同源：hover 用同一函数就能命中红行', () => {
+  const content = 'l1\nl2\n\n## 注意\n\n';
+  const rec = { oldText: '\n## 注意\n\n本条说明。\n只想清掉标记。', newText: '\n## 注意\n' };
+  const redLine = recordMarks(content, rec)[0]!.line;
+  // hover 的命中判定就是 recordMarks(...).some(m => m.line === 光标行)
+  const hoverHit = (lineNo: number): boolean => recordMarks(content, rec).some((m) => m.line === lineNo);
+  assert.equal(hoverHit(redLine), true, '红色所在行必须能 hover 出面板');
+  assert.equal(hoverHit(content.split('\n').length), false); // 结尾空行不该命中（修复前的错位点）
+});
+
+test('recordMarks newText 定位不到 → 空数组（不画也不 hover）', () => {
+  assert.deepEqual(recordMarks('完全不同\n的内容\n', { oldText: 'a', newText: '已经不存在的片段' }), []);
+});
+
+test('recordMarks 纯新增 → 全部 add 行', () => {
+  const marks = recordMarks('a\nNEW1\nNEW2\nb\n', { oldText: 'a\nb', newText: 'a\nNEW1\nNEW2\nb' });
+  assert.ok(marks.length >= 2);
+  assert.ok(marks.every((m) => m.kind === 'add'));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

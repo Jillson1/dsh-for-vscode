@@ -12,10 +12,8 @@ import {
   buildRevertEdit,
   locateNewText,
   pathsEqual,
-  redGreenLines,
-  mergeLineMarks,
   decorationTargetLine,
-  snapMarksToContent,
+  recordMarks,
   diffNature,
   summarizeDiff,
   deletedLines,
@@ -419,16 +417,13 @@ export class DiffService {
         continue;
       }
       drawn += 1;
-      // 删除发生在文件末尾时，投影锚点会落在结尾的空行上，而**空行的背景装饰在 VS Code 里
-      // 几乎不可见**（真机现象："这次删除完全没有高亮"）→ 吸附到 hunk 内最近的有内容行。
-      const marks = snapMarksToContent(
-        content,
-        mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine)),
-        startLine,
-      );
+      // 该记录在本文档上占据哪些行：与 hover 命中判定共用 recordMarks（唯一口径）。
+      // 内部会把落在结尾空行上的删除标记吸附到 hunk 内最近的有内容行——空行的背景装饰
+      // 在 VS Code 里几乎不可见（真机现象："这次删除完全没有高亮"）。
+      const marks = recordMarks(content, rec);
       for (const mark of marks) this.pushLineMark(handle, editor, mark);
-      // 行尾「⇠ 原:」提示贴在与删除标记**同一行**：此前用 startLine，出现"红色在第 16 行空行、
-      // 提示却挂在第 13 行"的错位（真机现象）。
+      // 行尾「⇠ 原:」提示贴在与删除标记**同一行**：此前用 startLine，出现"红色在一行、
+      // 提示却挂在另一行"的错位（真机现象）。
       const delMark = marks.find((m) => m.kind !== 'add');
       if (delMark !== undefined) {
         this.addDeletedHint(handle, editor, delMark.line, deletedLines(rec.oldText, rec.newText));
@@ -531,17 +526,27 @@ export class DiffService {
     const edit = buildRevertEdit(content, rec);
     if (edit === null) {
       // newText 已不在文件中（文件被用户改动）→ 锚点失效：移除记录 + 重建高亮
+      this.deps.log?.(`revert: 锚点失效（newText 已不在文件中，放弃还原）path=${rec.path} callId=${callId}`);
       this.dropRecord(callId);
       this.clearDecorations(rec.path);
       this.refreshFile(rec.path);
       return { ok: false, reason: 'anchor-missing', path: rec.path };
     }
     const applied = await this.applyRevertEdit(edit.path, edit.startOffset, edit.currentText, edit.replacement);
-    if (!applied) return { ok: false, reason: 'apply-failed', path: rec.path };
+    if (!applied) {
+      this.deps.log?.(`revert: 施加编辑失败 path=${rec.path} callId=${callId}`);
+      return { ok: false, reason: 'apply-failed', path: rec.path };
+    }
     this.dropRecord(callId);
     // 先无条件清空旧装饰再按剩余记录重建：避免任何重置失败路径留下"记录已删、高亮还在"的残留
     this.clearDecorations(rec.path);
     this.refreshFile(rec.path);
+    // 成功路径**必须留痕**：这条日志此前缺失，导致用户点「丢弃」改动了磁盘却查不到任何线索
+    // （真机排障：文件被还原出重复段落，日志里却找不到是谁改的）。
+    this.deps.log?.(
+      `revert: 文本已还原 path=${rec.path} callId=${callId} ` +
+        `oldLen=${rec.oldText.length} newLen=${rec.newText.length}（newText → oldText）`,
+    );
     return { ok: true, path: rec.path };
   }
 
@@ -618,11 +623,7 @@ export class DiffService {
           const content = document.getText();
           // 命中判定按"实际高亮行"（红/绿标记所在行）；同一行上的多条记录**聚合成一条 hover**，
           // 只展示信息量最大的那条（修改 > 删除 > 新增），避免同一处出现多个条目。
-          const hits = recs.filter((r) => {
-            const loc = locateNewText(content, r.newText);
-            if (loc === null) return false;
-            return redGreenLines(r.oldText, r.newText, loc.line).some((m) => m.line === lineNo);
-          });
+          const hits = recs.filter((r) => recordMarks(content, r).some((m) => m.line === lineNo));
           if (hits.length === 0) return null;
           const rankOf = (r: ModificationRecord): number => {
             const n = diffNature(r.oldText, r.newText);
@@ -729,6 +730,7 @@ export class DiffService {
     for (const rec of recs) this.dropRecord(rec.callId);
     this.clearDecorations(path);
     this.refreshFile(path);
+    this.deps.log?.(`clearMarks: 清除 path=${path} 记录 ${recs.length} 条（文件未改动）`);
     return recs.length;
   }
 
@@ -763,6 +765,7 @@ export class DiffService {
     const rec = this.dropRecord(callId);
     if (rec === undefined) return { ok: false, reason: 'not-found' };
     this.refreshFile(rec.path);
+    this.deps.log?.(`keep: 已保留 path=${rec.path} callId=${callId}（文件未改动，仅清标记）`);
     return { ok: true, path: rec.path };
   }
 
