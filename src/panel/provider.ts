@@ -73,6 +73,11 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
    * 仅当面板可见且 webview 就绪时投递；返回 false 表示当前不可注入
    * （面板未打开/隐藏），调用方据此提示用户。
    */
+  /** 面板当前是否可见（F6/F8 的投递决策要读它：可见时交回面板，避免 IDE 重复弹窗） */
+  isVisible(): boolean {
+    return this.view !== null && this.view.visible === true;
+  }
+
   injectComposer(text: string): boolean {
     return this.postToPage({ type: 'bridgeInjectComposer', text });
   }

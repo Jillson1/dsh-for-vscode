@@ -21,6 +21,7 @@ import {
 import { evaluateBridgeStatus, bridgeWarningText } from './bridge/status';
 import { ApprovalRouter } from './bridge/approval-router';
 import { QuestionRouter, normalizeQuestions } from './bridge/question-router';
+import { decideDelivery, deferredLogLine, type InteractionKind } from './bridge/interaction-routing';
 import {
   applySessionState,
   turnCompleteMessage,
@@ -340,6 +341,25 @@ export function activate(context: vscode.ExtensionContext): void {
     log: (m) => appendLog(`[question] ${m}`),
   });
 
+  /**
+   * F6/F8 的投递决策（策略 B，真机反馈后收敛）。
+   *
+   * 面板可见 = 用户就在 DSH 那边，同一个审批/提问面板上已有原生界面 → 交回面板；
+   * 面板隐藏 = 用户在看代码 → 在 IDE 弹，这才是"不切窗口也能应答"的价值。
+   */
+  function shouldDeferToPanel(kind: InteractionKind): boolean {
+    const delivery = decideDelivery({
+      kind,
+      onlyWhenPanelHidden: readConfig().config.interactionOnlyWhenPanelHidden,
+      panelVisible: panelPrimary.isVisible() || panelSecondary.isVisible(),
+    });
+    if (delivery === 'panel') {
+      appendLog(`[${kind}] ${deferredLogLine(kind)}`);
+      return true;
+    }
+    return false;
+  }
+
   /** 上行事件统一入口（注入给两个面板 provider） */
   function onUplinkEvent(event: { name: string; [k: string]: unknown }): void {
     appendLog(`[bridge] event ${event.name} ${JSON.stringify(event)}`);
@@ -364,6 +384,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     if (event.name === 'questionRequest') {
+      if (shouldDeferToPanel('question')) return; // 面板可见 → 面板上有原生提问界面
       void questionRouter.onRequest({
         sessionId: String(event.sessionId ?? ''),
         questionId: String(event.questionId ?? ''),
@@ -372,6 +393,7 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     if (event.name === 'approvalRequest') {
+      if (shouldDeferToPanel('approval')) return; // 面板可见 → 面板上有审批条
       void approvalRouter.onRequest({
         sessionId: String(event.sessionId ?? ''),
         approvalId: String(event.approvalId ?? ''),

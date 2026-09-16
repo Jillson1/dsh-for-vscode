@@ -55,5 +55,6 @@
   "dsh.cmd.quickEditSelection.title": "DSH: Quick Edit Selection (Alt+K)",
   "dsh.cmd.selectionQuickEdit.title": "Quick Edit This Selection",
   "dsh.cmd.selectionAddToDsh.title": "Add Selection to DSH",
-  "dsh.cmd.selectionSubmitReply.title": "Send to DSH"
+  "dsh.cmd.selectionSubmitReply.title": "Send to DSH",
+  "dsh.config.interactionOnlyWhenPanelHidden": "When the DSH panel is visible, leave approvals/questions to the panel instead of popping a VS Code modal/QuickPick (avoids asking the same thing twice). Turn off to always show them in VS Code."
 }

@@ -24,6 +24,8 @@ export interface RawDshConfig {
   selectionThreadsEnabled?: boolean;
   /** Quick Edit 发送前是否先确认（dsh.quickEdit.confirmBeforeSend） */
   quickEditConfirmBeforeSend?: boolean;
+  /** 面板可见时是否把审批/提问交给面板（dsh.interaction.onlyWhenPanelHidden） */
+  interactionOnlyWhenPanelHidden?: boolean;
 }
 
 /** 规范化后的配置（均有合法默认值） */
@@ -47,6 +49,8 @@ export interface DshConfig {
   selectionThreadsEnabled: boolean;
   /** Quick Edit 发送前是否先确认 */
   quickEditConfirmBeforeSend: boolean;
+  /** 面板可见时是否把审批/提问交给面板（策略 B，默认开） */
+  interactionOnlyWhenPanelHidden: boolean;
 }
 
 /** 默认配置 */
@@ -64,6 +68,8 @@ export const DEFAULTS: DshConfig = {
   // F10/F11 默认值：线程默认开（可在设置里关掉，避免"选一点就冒东西"）；发送前确认默认开
   selectionThreadsEnabled: true,
   quickEditConfirmBeforeSend: true,
+  // 策略 B：面板可见时审批/提问交回面板处理（避免同一问题问两遍、模态框抢焦点）
+  interactionOnlyWhenPanelHidden: true,
 };
 
 /** 安全边界：仅允许回环地址 */
@@ -139,11 +145,16 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
     typeof raw.quickEditConfirmBeforeSend === 'boolean'
       ? raw.quickEditConfirmBeforeSend
       : DEFAULTS.quickEditConfirmBeforeSend;
+  const interactionOnlyWhenPanelHidden =
+    typeof raw.interactionOnlyWhenPanelHidden === 'boolean'
+      ? raw.interactionOnlyWhenPanelHidden
+      : DEFAULTS.interactionOnlyWhenPanelHidden;
 
   return {
     config: {
       host, port, autoStart, stopOnExit, extraArgs, bridgeEnabled, workspaceRootIndex,
       silenceWarning, executablePath, notifyOnTurnComplete, selectionThreadsEnabled, quickEditConfirmBeforeSend,
+      interactionOnlyWhenPanelHidden,
     },
     errors,
   };
@@ -165,5 +176,6 @@ export function readConfig(): { config: DshConfig; errors: string[] } {
     notifyOnTurnComplete: ws.get<boolean>('notify.onTurnComplete'),
     selectionThreadsEnabled: ws.get<boolean>('selection.threads.enabled'),
     quickEditConfirmBeforeSend: ws.get<boolean>('quickEdit.confirmBeforeSend'),
+    interactionOnlyWhenPanelHidden: ws.get<boolean>('interaction.onlyWhenPanelHidden'),
   });
 }

@@ -525,6 +525,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "%dsh.config.quickEditConfirm%"
+        },
+        "dsh.interaction.onlyWhenPanelHidden": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.interactionOnlyWhenPanelHidden%"
         }
       }
     }
