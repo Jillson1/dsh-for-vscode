@@ -41,7 +41,19 @@ export interface BridgeMessageDeps {
    * 纯逻辑只负责路径解析与记录构造，实际 vscode 动作由注入方完成。
    * 可选：未注入（旧测试/降级路径）时静默忽略 diff 消息。
    */
-  recordDiff?(diff: { path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string; tool?: string }): void | Promise<void>;
+  recordDiff?(diff: {
+    path: string;
+    cwd?: string;
+    diffs: { oldText: string; newText: string }[];
+    callId: string;
+    tool?: string;
+    /** F1 变更账本：来源通道（relay 实时 / replay 回放） */
+    source?: 'relay' | 'replay';
+    /** F1：所属会话 id（账本按会话归档） */
+    sessionId?: string;
+    /** F1：所属轮次 */
+    turn?: number;
+  }): void | Promise<void>;
   /** 弹用户可见提示（生产接 vscode.window.showWarningMessage，测试注入假实现以断言） */
   showWarning(msg: string): void;
   /**

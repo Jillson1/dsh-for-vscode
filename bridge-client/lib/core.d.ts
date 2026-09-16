@@ -23,6 +23,12 @@ export function buildDiffAppliedMessage(payload: unknown): {
   callId: string;
   cwd?: string;
   tool?: string;
+  /** F1 变更账本：'relay' 实时广播 / 'replay' 历史回放（缺失时扩展按 relay 处理） */
+  source?: 'relay' | 'replay';
+  /** F1：所属会话 id（扩展按会话归档） */
+  sessionId?: string;
+  /** F1：所属轮次 */
+  turn?: number;
 } | null;
 
 /** 构造"工作区同步回执"消息（bridgeAck，path 可选；capabilities 为能力表，可选） */

@@ -174,6 +174,13 @@ export function buildDiffAppliedMessage(payload) {
   // 来源工具名（edit/write）：扩展据此判定丢弃语义（write 新建 → 删除文件）。
   // 缺了它 write 新建会退化成"文本还原"，hover 也不会出现「丢弃文件」。
   if (typeof payload.tool === 'string' && payload.tool !== '') msg.tool = payload.tool;
+  // source（F1 变更账本）：'relay' = 渲染时实时广播；'replay' = 历史回放（Reload / 重开会话）。
+  // 枚举白名单：未知值一律省略，扩展侧按缺省 'relay' 处理。
+  if (payload.source === 'relay' || payload.source === 'replay') msg.source = payload.source;
+  // sessionId（F1）：扩展按会话归档变更记录（脏数据不落库：非空字符串才透传）。
+  if (typeof payload.sessionId === 'string' && payload.sessionId !== '') msg.sessionId = payload.sessionId;
+  // turn（F1）：变更所属轮次（回放时可从节点推导；缺失则扩展记 0）。
+  if (Number.isFinite(payload.turn)) msg.turn = payload.turn;
   return msg;
 }
 

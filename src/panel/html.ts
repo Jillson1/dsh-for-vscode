@@ -15,7 +15,7 @@ export type PanelMessage =
   | { type: 'showLogs' }
   | { type: 'bridgeOpenExternal'; url: string }
   | { type: 'bridgeOpenFile'; path: string; cwd?: string; line?: number; oldText?: string; newText?: string }
-  | { type: 'bridgeDiffApplied'; path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string; tool?: string }
+  | { type: 'bridgeDiffApplied'; path: string; cwd?: string; diffs: { oldText: string; newText: string }[]; callId: string; tool?: string; source?: 'relay' | 'replay'; sessionId?: string; turn?: number }
   | { type: 'bridgeCopyText'; text: string; requestId: string }
   | { type: 'bridgeReadText'; requestId: string }
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
@@ -203,6 +203,10 @@ if (iframeEl) {
           : [],
         callId: typeof d.callId === 'string' ? d.callId : '',
         tool: typeof d.tool === 'string' ? d.tool : undefined,
+        // F1 变更账本：来源（relay 实时 / replay 回放）、会话 id、轮次
+        source: d.source === 'relay' || d.source === 'replay' ? d.source : undefined,
+        sessionId: typeof d.sessionId === 'string' ? d.sessionId : undefined,
+        turn: typeof d.turn === 'number' && Number.isFinite(d.turn) ? d.turn : undefined,
       });
       return;
     }

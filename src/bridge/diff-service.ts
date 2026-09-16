@@ -5,6 +5,7 @@
 // diff 对比视图、修改行 hover 说明（含可点击的操作按钮）。
 // 纯数据路径（记录/定位/撤销编辑构造/红绿投影）在 diff-tracker 单测覆盖；本层是 vscode 装配。
 import * as vscode from 'vscode';
+import { relative } from 'node:path';
 import {
   DiffStack,
   recordsFromDiffs,
@@ -23,6 +24,7 @@ import {
   type ModificationRecord,
   type HighlightLine,
 } from './diff-tracker';
+import { ChangeBook, contentHash, type ChangeRecord, type ChangeSource, type RevertOutcome } from './change-book';
 
 /**
  * hover 用的**紧凑** diff 预览：单个 ```diff 代码块（VS Code 原生红绿着色），
@@ -48,6 +50,12 @@ export interface DiffInput {
   callId: string;
   /** 来源工具名（'edit' | 'write'）：决定"丢弃"是删除文件还是文本还原。 */
   tool?: string;
+  /** F1 变更账本：来源通道（relay 实时 / replay 回放；缺省 relay）。 */
+  source?: ChangeSource;
+  /** F1：所属会话 id（账本按会话归档）。 */
+  sessionId?: string;
+  /** F1：所属轮次。 */
+  turn?: number;
 }
 
 /** vscode API 依赖面（生产直接传 vscode 命名空间，测试可注入假实现验证调用形状）。 */
@@ -74,6 +82,16 @@ export interface DiffServiceDeps {
   log?(msg: string): void;
   /** 工作区根（相对路径兜底解析）。 */
   workspaceRoot?: string;
+  /**
+   * F1 变更账本（可选）：注入后 record 会写入账本（跨 Reload 持久化），
+   * keep / revert / 清除标记会同步移除账本条目，保持"栈与账本按 callId 一致"。
+   */
+  book?: ChangeBook;
+  /**
+   * F1 当前会话 id getter（可选）：插件未在消息里带 sessionId 时的兜底。
+   * 生产由扩展入口维护（收到带 sessionId 的上行消息即更新）。
+   */
+  sessionId?: () => string | undefined;
 }
 
 /** 一个装饰桶：装饰类型 + 已收集的区间。 */
@@ -98,12 +116,18 @@ export class DiffService {
   private readonly stack = new DiffStack();
   /** 文件 → 红/绿两套 decoration（新增行绿、删除行红）+ 各自已收集的行区间。 */
   private readonly byPath = new Map<string, PathHandle>();
+  /** F1：最近一次上报的会话 id（插件消息带 sessionId 时更新；账本归档用） */
+  private lastSessionId: string | undefined;
 
   constructor(private readonly deps: DiffServiceDeps) {}
 
-  /** 记录一条 applied diff：读文件 → 定位 newText 区域 → 高亮 + 入栈。 */
+  /** 记录一条 applied diff：读文件 → 定位 newText 区域 → 高亮 + 入栈 + 写变更账本。 */
   async record(input: DiffInput): Promise<void> {
-    this.deps.log?.(`record: path=${input.path} diffs=${input.diffs.length} callId=${input.callId}`);
+    this.deps.log?.(
+      `record: path=${input.path} diffs=${input.diffs.length} callId=${input.callId} source=${input.source ?? 'relay'}`,
+    );
+    // F1：插件上报的会话 id 是账本归档的权威来源，记住它供本次及后续记账使用
+    if (input.sessionId !== undefined && input.sessionId !== '') this.lastSessionId = input.sessionId;
     const records = recordsFromDiffs(input, this.deps.workspaceRoot);
     if (records.length === 0) {
       this.deps.log?.('record: recordsFromDiffs 返回空（路径解析失败或 hunk 无效）');
@@ -119,16 +143,131 @@ export class DiffService {
       // 同一处改动去重：running 与 settled 两次广播可能用不同 callId，
       // 若同文件已存在 oldText/newText 完全相同的记录，视为同一次改动 → 跳过，
       // 避免同一处出现两条记录（表现为 hover 分裂、要连点两次"丢弃改动"）。
-      const dup = this.stack.forPath(rec.path).some((r) => r.oldText === rec.oldText && r.newText === rec.newText);
-      if (dup) {
-        this.deps.log?.(`record: 跳过重复改动 callId=${rec.callId} path=${rec.path}`);
+      const existing = this.stack
+        .forPath(rec.path)
+        .find((r) => r.oldText === rec.oldText && r.newText === rec.newText);
+      if (existing !== undefined) {
+        this.deps.log?.(`record: 跳过重复改动 callId=${rec.callId}（已记于 ${existing.callId}）path=${rec.path}`);
+        // F1：第二次广播（settled）带来的才是"文件已落盘"的内容——把既存记录的哈希补正，
+        // 否则账本会拿着改动前的哈希，把 DSH 自己刚写的内容误判为"被外部修改"（stale 误报）。
+        this.deps.book?.refreshHash(existing.callId, content === null ? '' : contentHash(content), rec.ts);
         continue;
       }
       if (this.stack.push(rec)) {
+        // F1：写账本（持久化）。只有真正入栈的记录才记账，保证栈与账本条数一致。
+        this.rememberInBook(rec, input, content);
         this.applyDecoration(rec, content);
       }
     }
-    this.deps.log?.(`record: 完成，栈大小=${this.stack.size}`);
+    this.deps.log?.(`record: 完成，栈大小=${this.stack.size} 账本=${this.deps.book?.count() ?? '-'}`);
+  }
+
+  /** F1：把一条刚入栈的记录写入变更账本（含记录时的文件哈希，供 stale 判定） */
+  private rememberInBook(rec: ModificationRecord, input: DiffInput, content: string | null): void {
+    const book = this.deps.book;
+    if (book === undefined) return;
+    book.add({
+      callId: rec.callId,
+      sessionId: this.currentSessionId(),
+      absPath: rec.path,
+      path: this.relativePath(rec.path),
+      tool: rec.tool,
+      oldText: rec.oldText,
+      newText: rec.newText,
+      turn: input.turn,
+      time: rec.ts,
+      source: input.source ?? 'relay',
+      // 哈希带的是**记录那一刻**的文件内容：之后被用户改动 → 与当前内容不符 → stale
+      fileHashAtRecord: content === null ? '' : contentHash(content),
+    });
+  }
+
+  /** F1：当前会话 id（消息里带来的 > 注入的 getter > 'local' 兜底桶） */
+  private currentSessionId(): string {
+    return this.lastSessionId ?? this.deps.sessionId?.() ?? 'local';
+  }
+
+  /** F1：绝对路径 → 工作区相对路径（树/显示用；不在工作区内则原样返回绝对路径） */
+  private relativePath(absPath: string): string {
+    const root = this.deps.workspaceRoot;
+    if (root === undefined || root === '') return absPath;
+    const rel = relative(root, absPath);
+    return rel === '' || rel.startsWith('..') ? absPath : rel;
+  }
+
+  /**
+   * 从修改栈移除一条记录，并同步移除账本条目（F1：栈与账本按 callId 保持一致）。
+   * 抽成单一入口的原因：撤销有 4 条成功/失效路径、保留有 1 条，任何一处漏同步都会造成
+   * "栈里没了、账本还在"——表现为 Reload 后幽灵记录复活，比彻底丢记录更难排查。
+   */
+  private dropRecord(callId: string): ModificationRecord | undefined {
+    const rec = this.stack.remove(callId);
+    if (rec !== undefined) this.deps.book?.removeByCallId(callId);
+    return rec;
+  }
+
+  /**
+   * F1 Reload 恢复：把账本里已持久化的变更重新灌回修改栈并重建高亮。
+   *
+   * 为什么不"重新走一遍 record"：账本记录已是最终形态（含**记录时**的文件哈希与 sessionId），
+   * 重新 record 会把哈希刷成"当前内容"，从此 stale 判定永远为假——而 stale 正是账本存在的意义。
+   * 因此这里只搬运 + 定位 + 高亮，绝不回写账本。
+   *
+   * @param records 账本记录（通常取某会话全部）
+   * @returns 真正被采纳（栈里此前没有该 callId）的条数
+   */
+  adoptFromBook(records: readonly ChangeRecord[]): number {
+    let adopted = 0;
+    for (const r of records) {
+      if (this.stack.get(r.callId) !== undefined) continue; // 实时广播已经记过：不重复
+      const rec: ModificationRecord = {
+        callId: r.callId,
+        path: r.absPath,
+        oldText: r.oldText,
+        newText: r.newText,
+        line: 1, // 占位：定位阶段回填
+        lineCount:
+          r.oldText === ''
+            ? Math.max(1, r.newText.split('\n').length)
+            : Math.max(1, r.oldText.split('\n').length),
+        ts: r.time,
+        tool: r.tool === 'unknown' ? undefined : r.tool,
+      };
+      if (!this.stack.push(rec)) continue;
+      adopted += 1;
+      if (this.lastSessionId === undefined) this.lastSessionId = r.sessionId;
+      // 异步定位（读文件 / 用已打开的内存文档）：文件未打开时只入栈，打开时由 refreshFile 补高亮
+      void (async () => {
+        try {
+          const editor = this.findEditor(rec.path);
+          const content = editor !== undefined ? editor.document.getText() : await this.deps.readFileText(rec.path);
+          this.applyDecoration(rec, content);
+        } catch {
+          this.deps.log?.(`adopt: 读取失败，仅入栈（${rec.path}）`);
+        }
+      })();
+    }
+    this.deps.log?.(`adopt: 采纳 ${adopted} 条账本记录，栈大小=${this.stack.size}`);
+    return adopted;
+  }
+
+  /**
+   * F1：把 revert 的执行结果映射为账本的 RevertOutcome。
+   * 账本据此决定是否移除记录——**只有真撤销成功才移除**，失败（含用户取消）保留记录便于重试。
+   */
+  async revertOutcome(callId: string): Promise<RevertOutcome> {
+    const r = await this.revert(callId);
+    if (r.ok) return { status: 'reverted' };
+    switch (r.reason) {
+      case 'not-found':
+        return { status: 'missing', reason: 'record not found' };
+      case 'unknown-tool':
+        return { status: 'refused', reason: 'tool unknown && old content empty' };
+      case 'anchor-missing':
+        return { status: 'anchor-missing', reason: 'newText no longer in file' };
+      default:
+        return { status: 'failed', reason: r.reason ?? 'unknown' };
+    }
   }
 
   /** 把一条记录的红绿行高亮落到可见编辑器（文件已打开则立即显示）。 */
@@ -344,7 +483,7 @@ export class DiffService {
         if (choice === undefined) return { ok: false, reason: 'cancelled', path: rec.path };
         if (choice === DROP_DSH && userPart !== null) {
           const ok = await this.replaceWholeFile(rec.path, userPart);
-          this.stack.remove(callId);
+          this.dropRecord(callId);
           this.clearDecorations(rec.path);
           this.refreshFile(rec.path);
           return ok
@@ -354,7 +493,7 @@ export class DiffService {
         // 其余（仍然删除整个文件）落到下面的删除流程
       }
       const gone = await this.deleteFileToTrash(rec.path);
-      this.stack.remove(callId);
+      this.dropRecord(callId);
       this.clearDecorations(rec.path);
       return gone
         ? { ok: true, path: rec.path, deletedFile: true }
@@ -374,14 +513,14 @@ export class DiffService {
     const edit = buildRevertEdit(content, rec);
     if (edit === null) {
       // newText 已不在文件中（文件被用户改动）→ 锚点失效：移除记录 + 重建高亮
-      this.stack.remove(callId);
+      this.dropRecord(callId);
       this.clearDecorations(rec.path);
       this.refreshFile(rec.path);
       return { ok: false, reason: 'anchor-missing', path: rec.path };
     }
     const applied = await this.applyRevertEdit(edit.path, edit.startOffset, edit.currentText, edit.replacement);
     if (!applied) return { ok: false, reason: 'apply-failed', path: rec.path };
-    this.stack.remove(callId);
+    this.dropRecord(callId);
     // 先无条件清空旧装饰再按剩余记录重建：避免任何重置失败路径留下"记录已删、高亮还在"的残留
     this.clearDecorations(rec.path);
     this.refreshFile(rec.path);
@@ -569,7 +708,7 @@ export class DiffService {
    */
   clearMarksForFile(path: string): number {
     const recs = this.stack.forPath(path);
-    for (const rec of recs) this.stack.remove(rec.callId);
+    for (const rec of recs) this.dropRecord(rec.callId);
     this.clearDecorations(path);
     this.refreshFile(path);
     return recs.length;
@@ -603,7 +742,7 @@ export class DiffService {
    * 语义：用户认可该改动，不再标记为"待撤销的 DSH 修改"。
    */
   async keep(callId: string): Promise<{ ok: boolean; reason?: string; path?: string }> {
-    const rec = this.stack.remove(callId);
+    const rec = this.dropRecord(callId);
     if (rec === undefined) return { ok: false, reason: 'not-found' };
     this.refreshFile(rec.path);
     return { ok: true, path: rec.path };

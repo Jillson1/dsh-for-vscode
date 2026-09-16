@@ -20,6 +20,7 @@ import {
 } from './bridge/installer';
 import { evaluateBridgeStatus, bridgeWarningText } from './bridge/status';
 import { DiffService } from './bridge/diff-service';
+import { ChangeBook, type RevertOutcome } from './bridge/change-book';
 
 let manager: ServiceManager | null = null;
 let output: vscode.OutputChannel | null = null;
@@ -309,6 +310,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const bridgeEnabledGetter = (): boolean => readConfig().config.bridgeEnabled;
 
   // —— A 组：修改可视化服务（单例，两个面板共享；高亮/撤销/diff 视图/hover）——
+  // —— F1：变更账本（持久化到 workspaceState；跨 Reload / 重开会话仍可查、可撤）——
+  // 撤销执行委托给 DiffService（账本不碰文件 IO，只负责"记什么、还在不在"）。
+  const changeBook = new ChangeBook(
+    context.workspaceState,
+    async (_sessionId, callId): Promise<RevertOutcome> => {
+      const svc = diffService;
+      if (svc === null) return { status: 'failed', reason: 'diff service unavailable' };
+      return svc.revertOutcome(callId);
+    },
+  );
+
   diffService = new DiffService({
     window: vscode.window,
     workspace: vscode.workspace,
@@ -326,9 +338,25 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     log: (m) => appendLog(`[diff] ${m}`),
     workspaceRoot: workspaceRootGetter(),
+    book: changeBook, // F1：record 写账本；keep/revert/清除标记同步移除
   });
   // 局部非空引用（模块级 diffService 供命令 handler 使用；activate 内用 ds 避免 null 收窄）
   const ds = diffService;
+
+  // —— F1 恢复：把账本里的变更灌回修改栈，让 Reload 后记录与高亮仍在 ——
+  // 口径说明：T1 恢复**全部会话**的记录（用户重载后最直接的期待是"我改过的文件还有标记"）；
+  // 会话维度的过滤属于 T2 的树 / F2 的导航（那里才需要"当前会话"语义）。
+  {
+    const sessionIds = changeBook.sessions();
+    let restored = 0;
+    for (const sid of sessionIds) {
+      const recs = changeBook.records(sid);
+      if (recs.length > 0) restored += ds.adoptFromBook(recs);
+    }
+    appendLog(
+      `[book] 恢复 ${restored} 条变更记录（账本 ${changeBook.count()} 条 / ${sessionIds.length} 个会话）`,
+    );
+  }
 
   // 左右两侧各一个 provider 实例，共享同一 manager（服务状态一致）
   const panelPrimary = new DshPanelProvider(
