@@ -20,6 +20,7 @@ import {
 } from './bridge/installer';
 import { evaluateBridgeStatus, bridgeWarningText } from './bridge/status';
 import { ApprovalRouter } from './bridge/approval-router';
+import { QuestionRouter, normalizeQuestions } from './bridge/question-router';
 import {
   applySessionState,
   turnCompleteMessage,
@@ -234,7 +235,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // —— F6/F7：上行消息的真实落点 ——
   // sessionState → agent 状态机（状态栏 + 完成通知）；approvalRequest → 审批路由器（模态框代答）；
-  // question/changesSync/checkpointsReady 仍是打桩（F8/F9 接管）。所有事件都进日志，便于排障。
+  // questionRequest → 提问路由器（QuickPick / 计划文档）。changesSync/checkpointsReady 仍是打桩（F9 接管）。
+  // 所有事件都进日志，便于排障。
   let agentState: AgentState = IDLE_AGENT_STATE;
 
   /** F7：本轮完成通知（只在本轮确有变更时才会被调用，见 agent-state.ts） */
@@ -272,6 +274,56 @@ export function activate(context: vscode.ExtensionContext): void {
     log: (m) => appendLog(`[approval] ${m}`),
   });
 
+  // —— F8：提问 / plan-review ——
+  // 计划正文开成只读虚拟文档（scheme `dsh-plan`）：容器是内存 Map，内容按需读，不落盘
+  const planDocuments = new Map<string, string>();
+  let planSeq = 0;
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('dsh-plan', {
+      provideTextDocumentContent: (uri) => planDocuments.get(uri.toString()) ?? '',
+    }),
+  );
+
+  /** 打开计划审阅文档（先尝试 Markdown 预览，失败则退化为普通只读编辑器） */
+  async function openPlanDocument(title: string, markdown: string): Promise<void> {
+    planSeq += 1;
+    const uri = vscode.Uri.parse(`dsh-plan://plan/${planSeq}.md`);
+    planDocuments.set(uri.toString(), markdown);
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: false });
+    appendLog(`[question] 计划审阅文档：${title}（${markdown.length} 字符）`);
+    try {
+      // Markdown 预览让计划"读起来像文档"；内置 markdown 扩展被禁用时忽略失败
+      await vscode.commands.executeCommand('markdown.showPreview', uri);
+    } catch {
+      /* 预览不可用：只读编辑器已足够 */
+    }
+  }
+
+  /** F8：提问路由器（问法与答案形状的规则都在 question-router.ts 的纯逻辑里） */
+  const questionRouter = new QuestionRouter({
+    pickOne: async (title, options, placeHolder) => {
+      const picked = await vscode.window.showQuickPick(
+        options.map((o) => (o.description === undefined ? { label: o.label } : { label: o.label, detail: o.description })),
+        { title, placeHolder, ignoreFocusOut: true },
+      );
+      return picked?.label;
+    },
+    pickMany: async (title, options, placeHolder) => {
+      const picked = await vscode.window.showQuickPick(
+        options.map((o) => (o.description === undefined ? { label: o.label } : { label: o.label, detail: o.description })),
+        { title, placeHolder, canPickMany: true, ignoreFocusOut: true },
+      );
+      return picked === undefined ? undefined : picked.map((p) => p.label);
+    },
+    // showInputBox 返回 Thenable：用 async 包一层（依赖签名要的是 Promise）
+    input: async (title, placeHolder) => vscode.window.showInputBox({ title, placeHolder, ignoreFocusOut: true }),
+    openPlan: openPlanDocument,
+    send: (message) => panelPrimary.postToPage(message) || panelSecondary.postToPage(message),
+    notify: (m) => void vscode.window.showWarningMessage(m),
+    log: (m) => appendLog(`[question] ${m}`),
+  });
+
   /** 上行事件统一入口（注入给两个面板 provider） */
   function onUplinkEvent(event: { name: string; [k: string]: unknown }): void {
     appendLog(`[bridge] event ${event.name} ${JSON.stringify(event)}`);
@@ -281,6 +333,14 @@ export function activate(context: vscode.ExtensionContext): void {
         running: event.running === true,
         turn: typeof event.turn === 'number' ? event.turn : 0,
         pending: typeof event.pending === 'number' ? event.pending : 0,
+      });
+      return;
+    }
+    if (event.name === 'questionRequest') {
+      void questionRouter.onRequest({
+        sessionId: String(event.sessionId ?? ''),
+        questionId: String(event.questionId ?? ''),
+        questions: normalizeQuestions(Array.isArray(event.questions) ? (event.questions as unknown[]) : []),
       });
       return;
     }
