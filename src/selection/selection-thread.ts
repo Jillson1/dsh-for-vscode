@@ -18,7 +18,6 @@ import {
   shouldOfferThread,
   selectionInfo,
   threadBody,
-  threadPreview,
   type SelectionInfo,
 } from './selection-model'
 
@@ -43,6 +42,11 @@ export interface SelectionThreadDeps {
   disposeThread(thread: unknown): void
   /** 设置开关 */
   enabled(): boolean
+  /**
+   * 是否处于"程序化选区"静音窗（默认 false）。
+   * 跳行定位等我们自己设置的选区必须静音，否则会凭空弹出评论线程。
+   */
+  suppressed?(): boolean
   /** 防抖毫秒（默认 250） */
   debounceMs?: number
   log?(message: string): void
@@ -74,6 +78,11 @@ export class SelectionThreadController {
 
   /** 立即应用一次（测试与"设置变更后刷新"用） */
   apply(): void {
+    // 程序化选区（跳行定位）：既不新建线程，也要把旧线程清掉——光标已经跳走了，线程留着就是错位
+    if (this.deps.suppressed?.() === true) {
+      this.clear()
+      return
+    }
     const editor = this.deps.activeEditor()
     if (editor === undefined) {
       this.clear()
@@ -89,7 +98,7 @@ export class SelectionThreadController {
     if (key === this.lastKey && this.thread !== undefined) return // 同选区同文本：不重建（避免闪烁）
     this.clear()
     const range = this.deps.range(info.startLine - 1, info.endLine - 1)
-    const body = this.deps.markdown(threadPreview(info))
+    const body = this.deps.markdown(threadBody(info))
     this.thread = this.deps.createThread(this.deps.uri(info.path), range, body)
     this.lastKey = key
     this.deps.log?.(`selection-thread: ${threadBody(info)}`)
@@ -107,6 +116,11 @@ export class SelectionThreadController {
   /** 当前是否挂着线程（诊断/测试） */
   hasThread(): boolean {
     return this.thread !== undefined
+  }
+
+  /** 当前线程（供"Quick Edit 按钮展开它"这类 UI 动作用；无则 undefined） */
+  currentThread(): unknown {
+    return this.thread
   }
 
   /** 由编辑器状态算出选区信息 */

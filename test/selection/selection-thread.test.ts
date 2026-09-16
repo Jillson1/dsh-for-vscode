@@ -28,7 +28,9 @@ function fakeEditor(lines: string[], sel: { start: [number, number]; end: [numbe
 }
 
 /** 组装控制器 + 可观察记录；编辑器可变，便于模拟选区变化 */
-function makeController(opts: { enabled?: boolean; debounceMs?: number; lines?: string[] } = {}) {
+function makeController(
+  opts: { enabled?: boolean; debounceMs?: number; lines?: string[]; suppressed?: () => boolean } = {},
+) {
   const lines = opts.lines ?? ['l1', 'l2', 'l3', 'l4', 'l5'];
   let editor = fakeEditor(lines, { start: [1, 0], end: [3, 0] }) as unknown as ReturnType<
     Parameters<SelectionThreadController['infoOf']>[0] extends never ? never : () => never
@@ -49,6 +51,7 @@ function makeController(opts: { enabled?: boolean; debounceMs?: number; lines?: 
     },
     disposeThread: (t) => disposed.push(t),
     enabled: () => opts.enabled ?? true,
+    suppressed: () => opts.suppressed?.() ?? false,
     debounceMs: opts.debounceMs ?? 0,
     log: (m) => logs.push(m),
   });
@@ -140,4 +143,33 @@ test('onSelectionChanged 走防抖：连续调用只应用一次；dispose 清�
   controller.dispose(); // 释放后定时器不应再触发
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(created.length, 1);
+});
+
+test('程序化选区静音窗内：不建线程（跳行定位不该冒出评论线程）', () => {
+  let muted = true;
+  const { controller, created } = makeController({ suppressed: () => muted });
+  controller.apply();
+  assert.equal(created.length, 0, '静音期间不应新建线程');
+  // 静音结束（用户自己选）→ 正常挂线程
+  muted = false;
+  controller.apply();
+  assert.equal(created.length, 1);
+});
+
+test('静音窗内会清掉旧线程（光标已经跳走，线程留着就是错位）', () => {
+  let muted = false;
+  const { controller, created, disposed } = makeController({ suppressed: () => muted });
+  controller.apply();
+  assert.equal(created.length, 1);
+  muted = true;
+  controller.apply();
+  assert.equal(disposed.length, 1, '旧线程必须被清掉');
+  assert.equal(controller.hasThread(), false);
+});
+
+test('currentThread：供"Quick Edit 按钮展开线程"取到活动线程', () => {
+  const { controller } = makeController();
+  assert.equal(controller.currentThread(), undefined);
+  controller.apply();
+  assert.ok(controller.currentThread() !== undefined);
 });

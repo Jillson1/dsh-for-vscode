@@ -7,7 +7,6 @@ import {
   selectionInfo,
   pathRefFor,
   threadBody,
-  threadPreview,
   quickEditPlaceholder,
   quickEditConfirmText,
   shouldOfferThread,
@@ -48,17 +47,16 @@ test('pathRefFor：单行不写区间（与 Add to DSH 的既有写法一致）'
   assert.equal(pathRefFor('a.ts', 5, 9), '@a.ts:5-9');
 });
 
-test('threadBody / threadPreview：摘要与折叠预览', () => {
+test('threadBody：紧凑摘要（文件名 + 区间，不带绝对路径与选中文本）', () => {
   const info = selectionInfo('D:/w/a.ts', 11, 0, 14, 0, 'const a = 1\nconst b = 2\nconst c = 3\n')!;
-  assert.equal(threadBody(info), '选中 3 行 · @D:/w/a.ts:12-14');
-  assert.match(threadPreview(info), /^选中 3 行 .*· const a = 1$/);
-  // 首行过长 → 截断（Comments 的 preview 只有一行）
-  const long = selectionInfo('D:/w/a.ts', 0, 0, 1, 0, 'x'.repeat(200) + '\ny')!;
-  assert.match(threadPreview(long), /…$/);
-  assert.ok(threadPreview(long).length < 120);
-  // 文本为空但选区有效（例如选中空白）→ 退回摘要
-  const blank = selectionInfo('D:/w/a.ts', 0, 0, 2, 0, '\n  \n')!;
-  assert.match(threadPreview(blank), /^选中 2 行/);
+  // 只保留文件名：绝对路径会把原生评论控件撑宽（真机反馈）
+  assert.equal(threadBody(info), '选中 3 行 · a.ts:12-14');
+  // 单行不写区间
+  const one = selectionInfo('E:/x/y/b.md', 0, 0, 0, 4, 'text')!;
+  assert.equal(threadBody(one), '选中 1 行 · b.md:1');
+  // Windows 反斜杠路径同样取文件名
+  const win = selectionInfo('E:' + String.fromCharCode(92) + 'codee' + String.fromCharCode(92) + 'c.cpp', 4, 0, 5, 0, 'x')!;
+  assert.equal(threadBody(win), '选中 1 行 · c.cpp:5');
 });
 
 test('shouldOfferThread：空选区/空白文本/开关关闭都不挂线程', () => {

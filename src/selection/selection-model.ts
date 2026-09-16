@@ -7,6 +7,7 @@
 //   - 空选区、单点光标（start == end 且无文本）不触发；
 //   - 可在设置里整体关闭（`dsh.selection.threads.enabled`）；
 //   - **绝不移动光标、绝不抢焦点**——线程只是"挂"在选区下方。
+import { basename } from 'node:path'
 import type { PanelDownlink } from '../panel/html'
 
 /** 一处选区（1-based 行号，便于直接拼 `@path:start-end`） */
@@ -66,16 +67,17 @@ export function pathRefFor(path: string, startLine: number, endLine: number): st
   return startLine === endLine ? `@${path}:${startLine}` : `@${path}:${startLine}-${endLine}`
 }
 
-/** 线程正文（一行摘要，含行数与引用） */
+/**
+ * 线程正文（折叠态下就是标题右边那行摘要）。
+ *
+ * 刻意只写 **文件名 + 区间**，不写绝对路径、也不附选中文本：评论 widget 是 VS Code 原生控件，
+ * 宽度不受扩展控制，正文一长就把整个输入框区域撑得很宽（真机反馈"输入框太宽、不美观"）。
+ * 完整引用仍然在（Add to DSH 与 Quick Edit 用的都是 `info.pathRef`），只是不在这里展开。
+ */
 export function threadBody(info: SelectionInfo): string {
-  return `选中 ${info.lineCount} 行 · ${info.pathRef}`
-}
-
-/** 线程正文的折叠预览（Comments 的 preview 模式只显示一行） */
-export function threadPreview(info: SelectionInfo): string {
-  const first = info.text.split('\n', 1)[0] ?? ''
-  const clipped = first.length > 60 ? `${first.slice(0, 60)}…` : first
-  return clipped === '' ? threadBody(info) : `${threadBody(info)} · ${clipped}`
+  const name = basename(info.path)
+  const range = info.startLine === info.endLine ? `:${info.startLine}` : `:${info.startLine}-${info.endLine}`
+  return `选中 ${info.lineCount} 行 · ${name}${range}`
 }
 
 /** Quick Edit 输入框的提示文案 */

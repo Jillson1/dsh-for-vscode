@@ -55,6 +55,7 @@ import {
   SelectionThreadController,
 } from './selection/selection-thread';
 import { sendQuickEdit } from './selection/quick-edit';
+import { selectionThreadsMuted } from './editorReveal';
 import type { SelectionInfo } from './selection/selection-model';
 import { revealLineInEditor } from './editorReveal';
 
@@ -909,13 +910,17 @@ ${sample}${more}`,
         { body, author: { name: 'DSH' }, mode: vscode.CommentMode.Preview },
       ]);
       thread.canReply = true; // 回复框就是"编辑器内的 Quick Edit 输入框"
-      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+      // **默认收起**：标题行（含两个按钮）可见，输入框要用户点开才出现。
+      // 这是真机反馈的直接修正：选完就弹输入框太打扰，而且原生 widget 的宽度不受我们控制。
+      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Collapsed;
       thread.contextValue = SELECTION_THREAD_CONTEXT; // 供 comments/commentThread/title 的 when 匹配
       thread.label = 'DSH';
       return thread;
     },
     disposeThread: (thread) => (thread as vscode.CommentThread).dispose(),
     enabled: () => readConfig().config.selectionThreadsEnabled,
+    // 跳行定位等程序化选区要静音：否则每次点击卡片路径都会冒出一个评论线程（真机反馈缺陷）
+    suppressed: () => selectionThreadsMuted(),
     log: (m) => appendLog(`[selection] ${m}`),
   });
 
@@ -1079,7 +1084,17 @@ ${sample}${more}`,
     selectionController,
     selectionThreads,
     vscode.commands.registerCommand('dsh.quickEdit.selection', () => void quickEditFromInput()),
-    vscode.commands.registerCommand('dsh.selection.quickEdit', () => void quickEditFromInput()),
+    // 线程标题上的「Quick Edit」：展开该线程 → 回复框（编辑器内输入框）出现，
+    // 用户在框里写指令后点「发送到 DSH」。没有线程时（例如被手动关掉）退化为 Alt+K 的 InputBox。
+    vscode.commands.registerCommand('dsh.selection.quickEdit', () => {
+      const thread = selectionThreads.currentThread() as vscode.CommentThread | undefined;
+      if (thread === undefined) {
+        void quickEditFromInput();
+        return;
+      }
+      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+      appendLog('[selection] Quick Edit：已展开线程输入框');
+    }),
     // 与既有 dsh.addSelectionToDsh 同一个实现（Comments 线程标题按钮用它）
     vscode.commands.registerCommand('dsh.selection.addToDsh', () =>
       void addSelectionToDsh({ providers: [panelPrimary, panelSecondary] }),
