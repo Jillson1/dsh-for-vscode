@@ -336,6 +336,13 @@
           "when": "resourceScheme == file"
         }
       ],
+      "editor/title/context": [
+        {
+          "command": "dsh.addFileToDsh",
+          "group": "DSH@1",
+          "when": "resourceScheme == file"
+        }
+      ],
       "editor/context": [
         {
           "command": "dsh.addSelectionToDsh",
