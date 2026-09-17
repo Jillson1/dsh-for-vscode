@@ -604,6 +604,16 @@ export function activate(context: vscode.ExtensionContext): void {
   // F10：选区工具条（CodeLens 版）——划选后在选区首行上方常驻两个可点按钮。
   // 真机反馈：原 comment thread 的按钮由 VS Code 固定渲染在编辑区左侧留白、位置不可控，
   // 而且实际观感上"只有一个按钮"；改由 CodeLens 承载入口，线程继续负责编辑器内输入框。
+  /**
+   * 最近一次选区变更的**来源**（鼠标 / 键盘 / 命令）。
+   *
+   * 用它把"用户选的"与"我们跳行时设的"分开 —— VS Code 内部映射已核实：
+   * `keyboard → 1`、`mouse → 2`、`api / code.jump / code.navigation → 3(Command)`；
+   * 我们的 `editor.selection = …`（revealLineInEditor）走的正是 `api` → Command。
+   * 因此工具条只在 Mouse/Keyboard 时出现，点卡片路径跳行不会再冒出来。
+   */
+  let lastSelectionKind: vscode.TextEditorSelectionChangeKind | undefined;
+
   const selectionLenses = new SelectionCodeLensProvider({
     activeSelection: () => {
       const ed = vscode.window.activeTextEditor;
@@ -613,6 +623,9 @@ export function activate(context: vscode.ExtensionContext): void {
         fsPath: ed.document.uri.fsPath,
         startLine: sel.start.line,
         isEmpty: sel.isEmpty,
+        userInitiated:
+          lastSelectionKind === vscode.TextEditorSelectionChangeKind.Mouse ||
+          lastSelectionKind === vscode.TextEditorSelectionChangeKind.Keyboard,
       };
     },
     enabled: () => readConfig().config.selectionLensEnabled,
@@ -992,7 +1005,9 @@ ${sample}${more}`,
       selectionLenses.refresh();
     }, 120);
   };
-  const selectionSubscription = vscode.window.onDidChangeTextEditorSelection(() => {
+  const selectionSubscription = vscode.window.onDidChangeTextEditorSelection((e) => {
+    // 记录来源：工具条据此区分"用户选的"与"我们跳行设的"（后者不出工具条）
+    lastSelectionKind = e.kind;
     selectionThreads.onSelectionChanged();
     refreshSelectionLens();
   });

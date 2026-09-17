@@ -31,6 +31,18 @@ export interface ActiveSelection {
   readonly startLine: number
   /** 零长度选区（只是光标）→ 不出工具条 */
   readonly isEmpty: boolean
+  /**
+   * 本次选区是否由**用户**发起（鼠标拖选 / 键盘选择）。
+   *
+   * 为什么必须区分（真机反馈）：点击工具卡片路径跳行时，我们为了"让用户看清落在哪一行"
+   * 会把整行设为选区 —— 那是**程序化选区**，此时工具条会与变更行的「保留/丢弃/对比」挤在一起，
+   * 而用户此刻并不想对这段代码做 Add to DSH / Quick Edit。
+   *
+   * 判定依据是 VS Code 给出的选区变更来源（已核实其内部映射）：
+   * `keyboard → 1`、`mouse → 2`、`api / code.jump / code.navigation → 3(Command)`。
+   * 我们自己的 `editor.selection = …` 走的正是 `api`，所以能精确排除，不需要靠时间窗猜。
+   */
+  readonly userInitiated: boolean
 }
 
 /** 一条工具条按钮的落点与内容 */
@@ -56,6 +68,7 @@ export interface SelectionCodeLensDeps {
  * - 开关关闭；
  * - 没有活动编辑器/选区；
  * - **零长度选区**（只点了一下光标）——否则每次点光标都冒工具条；
+ * - **程序化选区**（跳行定位把整行设为选区等）——否则工具条会与变更行的按钮挤在一起；
  * - 选区不在**当前请求的这个文档**里（VS Code 会对每个可见文档各问一次）。
  */
 export function selectionLensSpecs(
@@ -66,6 +79,8 @@ export function selectionLensSpecs(
   if (!enabled) return []
   if (selection === undefined) return []
   if (selection.isEmpty) return []
+  // 程序化选区（跳行定位等）不出工具条：用户此刻的意图是"看"，不是"对这段做操作"
+  if (!selection.userInitiated) return []
   if (selection.fsPath !== documentPath) return []
   const line = Math.max(0, selection.startLine)
   return [
