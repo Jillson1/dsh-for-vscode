@@ -308,6 +308,11 @@
     ],
     "keybindings": [
     {
+      "command": "dsh.addSelectionToDsh",
+      "key": "alt+d",
+      "when": "editorTextFocus && editorHasSelection"
+    },
+    {
       "command": "dsh.quickEdit.selection",
       "key": "alt+k",
       "when": "editorTextFocus && editorHasSelection"
