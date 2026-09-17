@@ -526,7 +526,6 @@ export function activate(context: vscode.ExtensionContext): void {
     log: (m) => appendLog(`[diff] ${m}`),
     workspaceRoot: workspaceRootGetter(),
     book: changeBook, // F1：record 写账本；keep/revert/清除标记同步移除
-    extensionPath: context.extensionUri.fsPath, // gutter 图标资源根目录（assets/gutter/*.png）
   });
   // 局部非空引用（模块级 diffService 供命令 handler 使用；activate 内用 ds 避免 null 收窄）
   const ds = diffService;

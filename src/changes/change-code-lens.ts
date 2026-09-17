@@ -97,19 +97,23 @@ export class ChangeCodeLensProvider implements vscode.CodeLensProvider {
       const range = new vscode.Range(spec.line, 0, spec.line, 0)
       const suffix = spec.count > 1 ? `（${spec.count} 处）` : ''
       lenses.push(
+        // 图标用 emoji 而非 $(codicon)：CodeLens 的文字颜色由主题决定（editorCodeLens.foreground），
+        // 扩展无法设置；$(icon) codicon 也只能单色跟随文字色。emoji 自带颜色、与主题无关，
+        // 是让这组按钮"看得见"的唯一手段（用户拍板 2026-09-17，方案 A）。
+        // 曾试过行号旁彩色 gutter 图标（方案 B）：颜色确实可控，但用户实测觉得不美观，已撤。
         new vscode.CodeLens(range, {
           command: 'dsh.diff.keep',
-          title: `$(check) 保留${suffix}`,
+          title: `✅ 保留${suffix}`,
           arguments: [spec.callId],
         }),
         new vscode.CodeLens(range, {
           command: 'dsh.diff.revert',
-          title: `$(discard) 丢弃${suffix}`,
+          title: `❌ 丢弃${suffix}`,
           arguments: [spec.callId],
         }),
         new vscode.CodeLens(range, {
           command: 'dsh.diff.show',
-          title: '$(diff) 对比',
+          title: '🔍 对比',
           arguments: [spec.callId],
         }),
       )

@@ -5,7 +5,7 @@
 // diff 对比视图、修改行 hover 说明（含可点击的操作按钮）。
 // 纯数据路径（记录/定位/撤销编辑构造/红绿投影）在 diff-tracker 单测覆盖；本层是 vscode 装配。
 import * as vscode from 'vscode';
-import { join, relative } from 'node:path';
+import { relative } from 'node:path';
 import {
   DiffStack,
   recordsFromDiffs,
@@ -92,11 +92,6 @@ export interface DiffServiceDeps {
    * 生产由扩展入口维护（收到带 sessionId 的上行消息即更新）。
    */
   sessionId?: () => string | undefined;
-  /**
-   * 扩展根目录（`context.extensionUri.fsPath`）：用于定位 gutter 图标资源
-   * （`assets/gutter/{add,mod,del}.png`）。缺省则只画行内装饰、不画 gutter 图标。
-   */
-  extensionPath?: string;
 }
 
 /** 一个装饰桶：装饰类型 + 已收集的区间。 */
@@ -351,40 +346,27 @@ export class DiffService {
   private decorationHandle(path: string): PathHandle {
     const existing = this.byPath.get(path);
     if (existing) return existing;
-    // F5 强化（用户拍板 2026-09-17）：行号旁加**彩色 gutter 图标**。
-    // 动因：CodeLens 的文字颜色由主题决定，扩展改不了，用户觉得"保留/丢弃/对比"不够醒目；
-    // gutter 图标是扩展自带的图片资源，颜色 100% 可控，且常驻在行号旁、不占正文。
-    // 图标三色与行内装饰同源：绿=新增 / 琥珀=替换 / 红=删除。
-    const gutter = (kind: 'add' | 'mod' | 'del'): { gutterIconPath: vscode.Uri } | object => {
-      const base = this.deps.extensionPath;
-      if (base === undefined || base === '') return {};
-      return {
-        gutterIconPath: this.deps.Uri.file(join(base, 'assets', 'gutter', `${kind}.png`)),
-        gutterIconSize: 'contain',
-      };
-    };
     const add = {
       type: this.deps.window.createTextEditorDecorationType({
         isWholeLine: true,
         backgroundColor: 'rgba(76, 175, 80, 0.22)',
         overviewRulerColor: 'rgba(76, 175, 80, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
-        ...gutter('add'),
       }),
       ranges: [] as vscode.Range[],
     };
     // 纯删除 = **行内不画任何标记**（用户拍板，2026-09-17 真机验收：红线不美观，统一去掉）。
     // 演进过程留档：整行红底 → 用户读成"这行被删了"（删 3 行只标 1 行、且标的是没被删的那行）；
-    // 改为行上边缘红线 → 空行上因装饰无宽度而画不出来，且观感仍嫌多余。
+    // 改为行上边缘红线 → 空行上因装饰无宽度而画不出来，且观感仍嫌多余；
+    // 再试行号旁彩色 gutter 图标（方案 B）→ 用户实测仍觉不美观，撤。
     // 最终形态：删除的"位置"只由**行尾 `⇠ 原: (N 行) …` 提示所在行**体现（用户确认这样够了），
-    // 行号旁只留一个红色 gutter 图标 + overview ruler 红点便于扫读定位；正文保持干净。
+    // 行内与行号旁都不画东西；overview ruler 红点保留（在滚动条区，不影响正文观感）。
     // 被删内容的全文在 hover 面板里（全量 diff 预览）。
     const del = {
       type: this.deps.window.createTextEditorDecorationType({
         isWholeLine: true,
         overviewRulerColor: 'rgba(229, 57, 53, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
-        ...gutter('del'),
       }),
       ranges: [] as vscode.Range[],
     };
@@ -394,7 +376,6 @@ export class DiffService {
         backgroundColor: 'rgba(255, 193, 7, 0.20)',
         overviewRulerColor: 'rgba(255, 193, 7, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
-        ...gutter('mod'),
       }),
       ranges: [] as vscode.Range[],
     };
