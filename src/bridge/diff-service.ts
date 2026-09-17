@@ -355,17 +355,15 @@ export class DiffService {
       }),
       ranges: [] as vscode.Range[],
     };
-    // 纯删除 = **边界标记**，不是"这一行被删"（用户拍板，2026-09-17 真机验收）：
-    // 被删内容在文档里没有实体行，装饰只能落在"后继存留行"上；此前用整行红底填充，
-    // 用户读成"这行被删了"（删 3 行只标 1 行、且标的是没被删的那行）。
-    // 现改为在该行**上边缘**画一条红色边线——位置正是"内容被移除的那个接缝"，
-    // 读作"这里少了一段"，不再声称某行被删。删除内容由行尾 `⇠ 原: (N 行) …` 与 hover 全量 diff 承载。
+    // 纯删除 = **行内不画任何标记**（用户拍板，2026-09-17 真机验收：红线不美观，统一去掉）。
+    // 演进过程留档：整行红底 → 用户读成"这行被删了"（删 3 行只标 1 行、且标的是没被删的那行）；
+    // 改为行上边缘红线 → 空行上因装饰无宽度而画不出来，且观感仍嫌多余。
+    // 最终形态：删除的"位置"只由**行尾 `⇠ 原: (N 行) …` 提示所在行**体现（用户确认这样够了），
+    // 另外在 overview ruler 留一个红点便于滚动时定位——ruler 在滚动条区，不影响正文观感。
+    // 被删内容的全文在 hover 面板里（全量 diff 预览）。
     const del = {
       type: this.deps.window.createTextEditorDecorationType({
         isWholeLine: true,
-        borderWidth: '2px 0 0 0',
-        borderStyle: 'solid',
-        borderColor: 'rgba(229, 57, 53, 0.85)',
         overviewRulerColor: 'rgba(229, 57, 53, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
       }),
