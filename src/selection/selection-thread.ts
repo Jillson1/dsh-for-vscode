@@ -9,14 +9,20 @@
 // **2026-09-17 语义变更（真机反馈）**：原先"一划选就自动挂线程"，但 VS Code 会把该线程的
 // 展开按钮固定渲染在**行号左侧**，用户明确要求去掉那个常驻按钮。
 // 现在改为**按需创建**：平时选区变化只 `clear()` 不创建；只有用户点了 `✨ Quick Edit`
-// （`openForCurrentSelection()`）才建线程并展开——于是"按钮只在你要用它的时候才出现"，
-// 而编辑器内输入框这条链路完全保留。
+// （`openForCurrentSelection()`）才建线程并展开——于是"按钮只在你要用它的时候才出现"。
+//
+// **2026-09-17 再次变更（交互统一，真机反馈）**：Quick Edit 的编辑器内输入框**已下线**——
+// 工具条按钮 / 右键菜单 / Alt+K 三条入口统一走**顶部 InputBox**（见 extension.ts 的
+// `quickEditFromInput`）。原因：线程输入框位置固定在选区下方、宽度不可控，无法与 InputBox 对齐，
+// 同一功能两种弹窗形态会被当成两个功能。
+// 因此本模块现在**只剩一个职责**：给选区提供一个锚点线程，承载标题按钮（`Add to DSH`）与正文摘要。
+// `openForCurrentSelection()` 目前无调用方（保留以备将来恢复编辑器内输入），`canReply` 留着但无入口。
 //
 // 打扰控制：
 //   - 选区为空/零长度 → 不建（openForCurrentSelection 内部校验）；
 //   - 同 range 同文本 → 复用不重建（避免闪烁与滚动跳动）；
 //   - 选区变化、编辑器失焦、文档关闭 → 旧线程 dispose（只保留一个活动线程）；
-//   - 设置 `dsh.selection.threads.enabled` 可整体关闭（关闭后 Quick Edit 退化为 InputBox）。
+//   - 设置 `dsh.selection.threads.enabled` 控制线程的创建（当前无 UI 入口会触发创建）。
 import * as vscode from 'vscode'
 import {
   shouldOfferThread,

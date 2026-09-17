@@ -1059,29 +1059,19 @@ ${sample}${more}`,
     log: (m) => appendLog(`[selection] ${m}`),
   });
 
-  // 线程回复 = Quick Edit 指令。
-  // 注意（实测纠正探索文档的一条结论）：Comments API **没有** `onDidSubmitCommentReply` 事件——
-  // `vscode.CommentReply` 是 `comments/commentThread/context` 菜单命令的**实参**，
-  // 也就是"线程输入框旁的那个动作按钮"点下去时把 { thread, text } 交给我们的命令。
-  // 因此回复走命令（`dsh.selection.submitReply`），而"回车即发"由 Alt+K 的 InputBox 提供。
-  function onSubmitReply(reply: vscode.CommentReply): void {
-    const text = typeof reply.text === 'string' ? reply.text : '';
-    // 关闭后不给"退化为 InputBox"的惊喜：明确告知（该命令在面板开启时可能仍可见）
-    if (!quickEditGate() || !ideGate('selectionThreads')) {
-      void vscode.window.showInformationMessage(quickEditDisabledMsg);
-      appendLog(`[quickEdit] 已关闭（quickEdit=${quickEditGate()} threads=${ideGate('selectionThreads')}），丢弃线程回复`);
-      return;
-    }
-    const info = currentSelection();
-    appendLog(`[quickEdit] 线程回复提交（${text.length} 字符）`);
-    if (info === null) {
-      void vscode.window.showInformationMessage('选区已失效，请重新选中要修改的代码');
-      return;
-    }
-    void runQuickEdit(info, text);
-  }
+  // —— 线程输入框已下线（2026-09-17 交互统一）——
+  //
+  // 这里原本是"线程回复 = Quick Edit 指令"的落点：`vscode.CommentReply` 经
+  // `comments/commentThread/context` 菜单命令把 `{ thread, text }` 交给我们。
+  // 现在 Quick Edit **只有顶部 InputBox 一种形态**（工具条按钮 / 右键菜单 / Alt+K 三条入口
+  // 全部经 `quickEditFromInput`），线程不再按需创建 → 该命令的 UI 入口不存在，
+  // 因此命令与函数一并删除，避免留下"看着能用、点了没反应"的死命令。
+  //
+  // 留下的提示：若将来要恢复编辑器内输入，正确做法是重新提供
+  // `comments/commentThread/context` 贡献点并接回回复处理（Comments API **没有**
+  // `onDidSubmitCommentReply` 事件，只能靠菜单命令的实参传递文本）。
 
-  // 选区变化：挂线程（防抖）；编辑器切换：清线程（避免线程挂在不相关的文件上）
+  // 选区变化：清线程（避免线程挂在不相关的文件上）
   // 同时刷新选区工具条（CodeLens）：选区一变就让 VS Code 重取那两个按钮。
   // 防抖理由与线程一致：拖选过程中选区事件每秒触发几十次，逐次重算会让按钮行抖动。
   let lensTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1101,7 +1091,15 @@ ${sample}${more}`,
   /** 切换活动编辑器：离散事件，立即重算（旧编辑器的按钮不该留在新文件上） */
   const activeEditorForLens = vscode.window.onDidChangeActiveTextEditor(() => selectionLenses.refresh());
 
-  /** Alt+K / 命令面板：Ask 一次指令再发送（不依赖线程是否可见） */
+  /**
+   * Quick Edit 的**唯一输入入口**（顶部 InputBox）。
+   *
+   * 三条入口共用它，因此形态完全一致（真机反馈要求统一）：
+   *   ① 选区工具条按钮 `✨ Quick Edit`（`dsh.selection.quickEdit`）
+   *   ② 编辑器右键「用指令改这段代码」（`dsh.quickEdit.selection`）
+   *   ③ 快捷键 Alt+K（同上命令）
+   * 顶部 InputBox 的回车即提交，与"编辑器内输入框"相比不需要额外点发送按钮。
+   */
   async function quickEditFromInput(): Promise<void> {
     if (!quickEditGate()) {
       void vscode.window.showInformationMessage(quickEditDisabledMsg);
@@ -1296,31 +1294,19 @@ ${sample}${more}`,
     // 线程不再随选区自动创建（VS Code 会把它的展开按钮固定渲染在行号左侧，用户要求去掉那个常驻按钮），
     // 所以这里先按需建；不满足条件（选区无效 / 设置关闭 / 静音）时退化为 Alt+K 的 InputBox。
     vscode.commands.registerCommand('dsh.selection.quickEdit', () => {
-      // F11 总开关关闭时不给"退化为 InputBox"的惊喜：明确告知，避免用户以为按钮坏了
-      if (!quickEditGate()) {
-        void vscode.window.showInformationMessage(quickEditDisabledMsg);
-        return;
-      }
-      // 交互增强总开关 / 选区线程关闭时，线程不会按需创建 → 退化为 Alt+K 的 InputBox（既有语义）
-      if (!ideGate('selectionThreads')) {
-        appendLog('[selection] 线程已关闭（dsh.ideInteraction.enabled / dsh.selection.threads.enabled），走 InputBox');
-        void quickEditFromInput();
-        return;
-      }
-      const thread = selectionThreads.openForCurrentSelection() as vscode.CommentThread | undefined;
-      if (thread === undefined) {
-        appendLog('[selection] Quick Edit：无法按需创建线程（选区无效/设置关闭），退化为 InputBox');
-        void quickEditFromInput();
-        return;
-      }
-      appendLog('[selection] Quick Edit：已按需展开线程输入框');
+      // **2026-09-17 交互统一（真机反馈）**：原先这个按钮走的是"按需创建评论线程 + 编辑器内输入框"，
+      // 而右键菜单 / Alt+K 走的是顶部 InputBox —— 同一件事有两种弹窗形态（一个在选区处、一个在顶部），
+      // 用户要求统一。现在**两个入口都走顶部 InputBox**（`quickEditFromInput`），形态、回车即发、
+      // 空指令校验与"发送前确认"全部一致。
+      //
+      // 为什么不做成"两条路但外观一样"：线程输入框是 VS Code 原生 widget，位置固定在选区下方、
+      // 宽度不可控，**永远无法**与顶部 InputBox 对齐；要统一就只能统一到 InputBox。
+      appendLog('[selection] Quick Edit：统一走顶部 InputBox（与右键菜单 / Alt+K 同一路径）');
+      void quickEditFromInput();
     }),
-    // 与既有 dsh.addSelectionToDsh 同一个实现（Comments 线程标题按钮用它）
+    // 与既有 dsh.addSelectionToDsh 同一个实现（评论线程标题按钮用它）
     vscode.commands.registerCommand('dsh.selection.addToDsh', () =>
       void addSelectionToDsh({ providers: [panelPrimary, panelSecondary] }),
-    ),
-    vscode.commands.registerCommand('dsh.selection.submitReply', (reply?: vscode.CommentReply) =>
-      reply === undefined ? undefined : onSubmitReply(reply),
     ),
     // —— F9 检查点：视图 / 内容提供者 / 命令 ——
     checkpointsView,

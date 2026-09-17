@@ -5,8 +5,11 @@
 // 按钮"且要悬停才发现。用户拍板改成 CodeLens 版：
 // **在选区首行上方常驻两个并排可点按钮** —— 选中即出现、不用悬停、位置与数量都可控。
 //
-// comment thread 仍然保留：它提供的 `canReply` 回复框是"编辑器内输入框"的实际载体，
-// CodeLens 只负责把入口摆到看得见的地方（Quick Edit 按钮 = 展开该线程并聚焦输入框）。
+// 线程的**编辑器内输入框已下线**（2026-09-17 交互统一）：Quick Edit 由工具条按钮、右键菜单与
+// Alt+K 三条入口共用**顶部 InputBox**（extension.ts 的 `quickEditFromInput`），形态与回车行为完全一致。
+// 统一的原因：评论线程是 VS Code 原生 widget，位置固定在选区下方、宽度不可控，永远无法与顶部
+// InputBox 对齐；同一件事两种弹窗形态会被当成两个功能（真机反馈即如此）。
+// 线程本身仍保留（锚点 + 标题按钮 + 正文摘要），但不再承担输入框职责。
 //
 // 纯逻辑（selectionLensSpecs）与 vscode 装配分离，前者可 node:test 直测。
 import * as vscode from 'vscode'

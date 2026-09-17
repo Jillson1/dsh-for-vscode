@@ -51,8 +51,7 @@
     "onCommand:dsh.checkpoint.restore",
     "onCommand:dsh.quickEdit.selection",
     "onCommand:dsh.selection.quickEdit",
-    "onCommand:dsh.selection.addToDsh",
-    "onCommand:dsh.selection.submitReply"
+    "onCommand:dsh.selection.addToDsh"
   ],
   "contributes": {
     "viewsContainers": {
@@ -298,12 +297,6 @@
         "title": "%dsh.cmd.selectionAddToDsh.title%",
         "icon": "$(add)",
         "category": "DSH"
-      },
-      {
-        "command": "dsh.selection.submitReply",
-        "title": "%dsh.cmd.selectionSubmitReply.title%",
-        "icon": "$(send)",
-        "category": "DSH"
       }
     ],
     "keybindings": [
@@ -378,13 +371,6 @@
           "command": "dsh.selection.quickEdit",
           "when": "commentThread == dsh.selection",
           "group": "inline@2"
-        }
-      ],
-      "comments/commentThread/context": [
-        {
-          "command": "dsh.selection.submitReply",
-          "when": "commentThread == dsh.selection",
-          "group": "inline"
         }
       ],
       "view/item/context": [

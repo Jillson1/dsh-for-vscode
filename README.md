@@ -90,9 +90,10 @@ As soon as DSH edits a file through `edit` / `write`:
 
 ### ⚡ Edit in place: selection toolbar + Quick Edit
 
-- 🎯 **Selection toolbar**: after you select code, `Add Selection to DSH` / `⚡ Quick Edit` appear above the first selected line, alongside an in-editor comment-thread input box;
+- 🎯 **Selection toolbar**: after you select code, `🐳 Add to DSH` / `✨ Quick Edit` appear above the first selected line (the cursor never moves and focus is never stolen);
 - 📝 **Add to DSH**: writes `@file:start-end` into the composer as a **draft** (not sent) so you can finish your prompt first;
-- ⚡ **Quick Edit**: type "debounce this" in the box and send — or press <kbd>Alt</kbd>+<kbd>K</kbd> and hit Enter — and DSH receives `@file:12-14 debounce this` and runs it;
+- ⚡ **Quick Edit (unified interaction)**: **all three entry points** — the toolbar button, the editor context menu item, and <kbd>Alt</kbd>+<kbd>K</kbd> — open **the same input box at the top of the editor**; type "debounce this" and press Enter, and DSH receives `@file:12-14 debounce this` and runs it;
+  - Why unified: the in-editor comment thread input is pinned below the selection with an uncontrollable width and can never be aligned with the top input box; the same action showing two different popups reads as two different features, so there is now exactly one form;
   - 🛑 A confirmation dialog (showing the full text) appears before the first send, with a "send and don't ask again" option; empty instructions are never sent, so **no model turn is spent on your behalf**;
   - ⏸️ While DSH is busy the instruction is only written to the draft with a "DSH is running" notice — **nothing is preempted and nothing is lost**;
 - 🕊️ **Never intrusive**: only user selections trigger it (programmatic jumps do not), the cursor never moves, focus is never stolen, and zero-length or whitespace-only selections do nothing.
@@ -141,7 +142,7 @@ npm run package        # produces dsh-vscode.vsix — install it as in option 1
 | Undo one specific change | "Discard" in the hover, or right-click the node in the `DSH Changes` tree |
 | Undo a whole file or session | Right-click a **file** or **session** node (multi-select with <kbd>Ctrl</kbd> supported) |
 | Go back several turns | `DSH Checkpoints` view → right-click a checkpoint → restore to before that turn |
-| Ask DSH to edit the code I selected | Select → "⚡ Quick Edit" or <kbd>Alt</kbd>+<kbd>K</kbd> → type the instruction |
+| Ask DSH to edit the code I selected | Select → "✨ Quick Edit" or <kbd>Alt</kbd>+<kbd>K</kbd> → type in the **top input box**, Enter sends |
 | Reference this code in the conversation | Select → <kbd>Alt</kbd>+<kbd>D</kbd> (draft only, not sent) |
 | Approve an out-of-scope action | Choose "Allow once / Deny" in the VS Code modal |
 | Keep things quiet | Turn off `dsh.ideInteraction.enabled`, `dsh.changes.enabled`, etc. |
@@ -155,7 +156,7 @@ npm run package        # produces dsh-vscode.vsix — install it as in option 1
 | Add selection to DSH | <kbd>Alt</kbd>+<kbd>D</kbd> | Editor has a selection |
 | Quick Edit this selection | <kbd>Alt</kbd>+<kbd>K</kbd> | Editor has a selection |
 
-Context menu entries: Explorer / editor tab (`Add to DSH`), editor (`Add to DSH`, `Quick Edit This Selection`), `DSH Changes` nodes (keep/discard/batch), `DSH Checkpoints` nodes (diff/restore), comment thread title (`Add to DSH` / `Quick Edit`).
+Context menu entries: Explorer / editor tab (`Add to DSH`), editor (`Add to DSH`, `Quick Edit This Selection`), `DSH Changes` nodes (keep/discard/batch), `DSH Checkpoints` nodes (diff/restore).
 
 ## 🧰 Command palette (`DSH:`)
 
@@ -209,10 +210,9 @@ Context menu entries: Explorer / editor tab (`Add to DSH`), editor (`Add to DSH`
 
 | Command | Description |
 |---|---|
-| `DSH: Quick Edit Selection (Alt+K)` | Input box; Enter sends |
-| `Quick Edit This Selection` | Thread title button: expand the in-editor input box |
-| `Add Selection to DSH` | Thread title button: write a draft without sending |
-| `Send to DSH` | Thread input button: send the instruction to DSH |
+| `DSH: Quick Edit Selection (Alt+K)` | Top input box; Enter sends (shared by the context menu and Alt+K) |
+| `Edit This Selection with an Instruction` | Selection toolbar `✨ Quick Edit` button: **same top input box** |
+| `Add Selection to DSH` | Selection toolbar `🐳 Add to DSH` button: write a draft without sending |
 
 ## 🔗 Bridge and integration
 
@@ -259,7 +259,7 @@ The bridge only works inside the panel. If it is unavailable (e.g. you opened th
 | Setting | Default | Description |
 |---|---|---|
 | `dsh.selection.lens.enabled` | `true` | The toolbar buttons above the first selected line (context menu and shortcuts still work when off) |
-| `dsh.selection.threads.enabled` | `true` | In-editor comment thread input box (with it off, Quick Edit falls back to the Alt+K input box) |
+| `dsh.selection.threads.enabled` | `true` | Whether selection comment threads are created (Quick Edit input is unified to the top input box and is unaffected by this) |
 | `dsh.quickEdit.confirmBeforeSend` | `true` | Confirm before Quick Edit sends (it spends a real model turn); choosing "send and don't ask again" flips this to `false` |
 | `dsh.notify.onTurnComplete` | `true` | Turn-complete notification (only when the turn really changed files) |
 | `dsh.interaction.onlyWhenPanelHidden` | `true` | Leave approvals/questions to the panel while it is visible instead of asking again in the IDE |
@@ -312,7 +312,7 @@ src/
 │   └── agent-state.ts     # F7 state machine
 ├── changes/               # F2 navigation / F3 tree / F4 batch / F5 CodeLens
 ├── checkpoints/           # F9 ledger reading, blob diff, restore orchestration
-├── selection/             # F10 toolbar and thread / F11 Quick Edit
+├── selection/             # F10 toolbar and thread / F11 Quick Edit (unified top input box)
 ├── service/               # port probing, child process wrapper, service manager
 └── panel/                 # webview view provider and placeholder page template
 ```

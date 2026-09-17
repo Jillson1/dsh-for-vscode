@@ -89,9 +89,10 @@
 
 ### ⚡ 就地改代码：选区工具条 + Quick Edit
 
-- 🎯 **选区工具条**：划选代码后，选区首行上方出现 `添加选区到 DSH` / `⚡ Quick Edit` 两个按钮；同时编辑器内提供评论线程式输入框；
+- 🎯 **选区工具条**：划选代码后，选区首行上方出现 `🐳 添加到 DSH` / `✨ Quick Edit` 两个按钮（不移动光标、不抢焦点）；
 - 📝 **Add to DSH**：把 `@文件:起始-结束` 写进输入框草稿（**不发送**），你补完描述再自己发；
-- ⚡ **Quick Edit**：在输入框写一句「改成防抖」，点「发送到 DSH」或按 <kbd>Alt</kbd>+<kbd>K</kbd> 输入后回车，即自动发送 `@文件:12-14 改成防抖` 给 DSH 执行；
+- ⚡ **Quick Edit（交互已统一）**：**三条入口**——工具条按钮、编辑器右键「用指令改这段代码」、<kbd>Alt</kbd>+<kbd>K</kbd>——**都在编辑器顶部弹出同一个输入框**，写一句「改成防抖」后回车即发，自动发送 `@文件:12-14 改成防抖` 给 DSH 执行；
+  - 为什么统一：编辑器内评论线程的输入框位置固定在选区下方、宽度不可控，无法与顶部输入框对齐；同一件事有两种弹窗形态会被当成两个功能，因此统一为顶部的唯一形态；
   - 🛑 首次发送前弹确认框（含将发送的全文），可勾「发送并不再询问」；空指令不发，**不替你消耗模型调用**；
   - ⏸️ DSH 正在跑一轮时，指令只写入草稿并提示「DSH 正在运行」，**不抢占、不丢输入**；
 - 🕊️ **绝不打扰你**：只响应用户自己的选区（程序化跳行不会冒出线程）、不移动光标、不抢焦点，零长度或纯空白选区不触发。
@@ -140,7 +141,7 @@ npm run package        # 产出 dsh-vscode.vsix，再按方式一安装
 | 撤销某一处 | hover 里点「丢弃」，或在 `DSH 变更` 树里右键该节点 |
 | 撤销一个文件/整个会话的改动 | 树里右键**文件节点**或**会话节点**（支持 <kbd>Ctrl</kbd> 多选） |
 | 回到好几轮之前的状态 | `DSH 检查点` 视图 → 右键检查点 → 恢复到该轮之前 |
-| 让 DSH 改我选的这段代码 | 划选 → 点「⚡ Quick Edit」或按 <kbd>Alt</kbd>+<kbd>K</kbd> → 写指令发送 |
+| 让 DSH 改我选的这段代码 | 划选 → 点「✨ Quick Edit」或按 <kbd>Alt</kbd>+<kbd>K</kbd> → **顶部输入框**写指令、回车即发 |
 | 把这段代码引用给 DSH 讨论 | 划选 → <kbd>Alt</kbd>+<kbd>D</kbd>（只写草稿，不发送） |
 | 批准 DSH 的越界操作 | VS Code 弹出的模态框里选「允许一次 / 拒绝」 |
 | 只想安静用基础功能 | 设置里关掉 `dsh.ideInteraction.enabled` 或 `dsh.changes.enabled` 等开关 |
@@ -154,7 +155,7 @@ npm run package        # 产出 dsh-vscode.vsix，再按方式一安装
 | 将选区添加到 DSH | <kbd>Alt</kbd>+<kbd>D</kbd> | 编辑器有选区 |
 | 用指令改这段代码（Quick Edit） | <kbd>Alt</kbd>+<kbd>K</kbd> | 编辑器有选区 |
 
-右键菜单入口：文件树 / 编辑器标签（`添加到 DSH`）、编辑器（`添加到 DSH`、`用指令改这段代码`）、`DSH 变更` 树节点（保留/丢弃/批量）、`DSH 检查点` 节点（对比/恢复）、评论线程标题（`Add to DSH` / `Quick Edit`）。
+右键菜单入口：文件树 / 编辑器标签（`添加到 DSH`）、编辑器（`添加到 DSH`、`用指令改这段代码`）、`DSH 变更` 树节点（保留/丢弃/批量）、`DSH 检查点` 节点（对比/恢复）。
 
 ## 🧰 命令面板（`DSH:` 开头）
 
@@ -208,10 +209,9 @@ npm run package        # 产出 dsh-vscode.vsix，再按方式一安装
 
 | 命令 | 说明 |
 |---|---|
-| `DSH: 用指令改这段代码（Alt+K）` | 弹输入框，回车即发 |
-| `Quick Edit 这段代码` | 线程标题按钮：展开编辑器内输入框 |
-| `把选区加入 DSH` | 线程标题按钮：写草稿不发送 |
-| `发送到 DSH` | 线程输入框按钮：把指令发给 DSH |
+| `DSH: 用指令改这段代码（Alt+K）` | 顶部弹出输入框，回车即发（右键菜单与 Alt+K 共用） |
+| `用指令改这段代码` | 选区工具条 `✨ Quick Edit` 按钮：**同上，顶部输入框** |
+| `把选区加入 DSH` | 选区工具条 `🐳 添加到 DSH` 按钮：写草稿不发送 |
 
 ## 🔗 桥接与联动
 
@@ -258,7 +258,7 @@ npm run package        # 产出 dsh-vscode.vsix，再按方式一安装
 | 设置项 | 默认 | 说明 |
 |---|---|---|
 | `dsh.selection.lens.enabled` | `true` | 选区首行上方的工具条按钮（关掉后仍可用右键菜单与快捷键） |
-| `dsh.selection.threads.enabled` | `true` | 编辑器内评论线程输入框（关掉后 Quick Edit 退化为 Alt+K 输入框） |
+| `dsh.selection.threads.enabled` | `true` | 选区评论线程的创建开关（Quick Edit 的输入已统一为顶部输入框，不受此项影响） |
 | `dsh.quickEdit.confirmBeforeSend` | `true` | Quick Edit 发送前确认（会真实消耗一轮模型调用）；勾过"不再询问"会自动置 false |
 | `dsh.notify.onTurnComplete` | `true` | 轮次完成通知（仅当本轮确实改了文件） |
 | `dsh.interaction.onlyWhenPanelHidden` | `true` | 面板可见时把审批/提问交给面板，不在 IDE 再问一遍 |
@@ -311,7 +311,7 @@ src/
 │   └── agent-state.ts     # F7 状态机
 ├── changes/               # F2 导航 / F3 树 / F4 批量 / F5 CodeLens
 ├── checkpoints/           # F9 账本读取、blob diff、恢复编排
-├── selection/             # F10 工具条与线程 / F11 Quick Edit
+├── selection/             # F10 选区工具条与线程 / F11 Quick Edit（统一走顶部输入框）
 ├── service/               # 端口探测、子进程封装、服务管理器
 └── panel/                 # WebviewViewProvider 与占位页模板
 ```
