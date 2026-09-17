@@ -19,8 +19,14 @@ export const QUICK_EDIT_COMMAND = 'dsh.selection.quickEdit'
  * 按钮文案用 emoji 而非 `$(codicon)`：CodeLens 的文字颜色由主题决定
  * （`editorCodeLens.foreground`），扩展改不了；emoji 自带颜色、与主题无关，才看得见。
  * （与 F5 变更行 CodeLens 的取舍一致。）
+ *
+ * ⚠️ 挑 emoji 时必须选**默认 emoji 呈现**的码位：最初的 `➕`(U+2795) 属于 dingbat 字符，
+ * 默认是「文字呈现」，Windows 上渲染成单色细加号 —— 真机反馈"暗色模式下不醒目"就是这个原因。
+ * 换成鲸鱼 `🐳`(U+1F433)：它落在 Miscellaneous Symbols and Pictographs 区段，默认 emoji 呈现，
+ * **必定彩色**，而且本来就是 DSH 的标志。
+ * （备选：给 `➕` 补 U+FE0F 变体选择符强制 emoji 呈现，即 `➕️`；观感不如鲸鱼贴题。）
  */
-export const ADD_TITLE = '➕ 添加到 DSH'
+export const ADD_TITLE = '🐳 添加到 DSH'
 export const QUICK_EDIT_TITLE = '✨ Quick Edit'
 
 /** 当前选区（纯数据，0-based 行号） */
