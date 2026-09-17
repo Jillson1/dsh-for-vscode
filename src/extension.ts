@@ -972,6 +972,10 @@ ${sample}${more}`,
       return thread;
     },
     disposeThread: (thread) => (thread as vscode.CommentThread).dispose(),
+    // 按需创建时直接展开：用户点 Quick Edit 的意图就是"现在写指令"，不需要再点一次
+    expandThread: (thread) => {
+      (thread as vscode.CommentThread).collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+    },
     enabled: () => readConfig().config.selectionThreadsEnabled,
     // 跳行定位等程序化选区要静音：否则每次点击卡片路径都会冒出一个评论线程（真机反馈缺陷）
     suppressed: () => selectionThreadsMuted(),
@@ -1157,16 +1161,18 @@ ${sample}${more}`,
     selectionController,
     selectionThreads,
     vscode.commands.registerCommand('dsh.quickEdit.selection', () => void quickEditFromInput()),
-    // 线程标题上的「Quick Edit」：展开该线程 → 回复框（编辑器内输入框）出现，
-    // 用户在框里写指令后点「发送到 DSH」。没有线程时（例如被手动关掉）退化为 Alt+K 的 InputBox。
+    // 「Quick Edit」：**按需创建**线程并展开它 → 回复框（编辑器内输入框）出现，
+    // 用户在框里写指令后点「发送到 DSH」。
+    // 线程不再随选区自动创建（VS Code 会把它的展开按钮固定渲染在行号左侧，用户要求去掉那个常驻按钮），
+    // 所以这里先按需建；不满足条件（选区无效 / 设置关闭 / 静音）时退化为 Alt+K 的 InputBox。
     vscode.commands.registerCommand('dsh.selection.quickEdit', () => {
-      const thread = selectionThreads.currentThread() as vscode.CommentThread | undefined;
+      const thread = selectionThreads.openForCurrentSelection() as vscode.CommentThread | undefined;
       if (thread === undefined) {
+        appendLog('[selection] Quick Edit：无法按需创建线程（选区无效/设置关闭），退化为 InputBox');
         void quickEditFromInput();
         return;
       }
-      thread.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
-      appendLog('[selection] Quick Edit：已展开线程输入框');
+      appendLog('[selection] Quick Edit：已按需展开线程输入框');
     }),
     // 与既有 dsh.addSelectionToDsh 同一个实现（Comments 线程标题按钮用它）
     vscode.commands.registerCommand('dsh.selection.addToDsh', () =>

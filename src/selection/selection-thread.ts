@@ -1,18 +1,22 @@
-// src/selection/selection-thread.ts — F10 选区悬浮工具条（Comments 内联线程）
+// src/selection/selection-thread.ts — F10 选区线程（Comments 内联线程，**按需创建**）
 //
 // 方案取舍（探索文档 §8.5 的实测结论）：VS Code **没有**"选区悬浮工具条" API，
 // "ChatLocation / inline chat 不可接管"。能做到的最接近形态是 **Comments 内联线程**：
 //   - 线程锚定在选区范围（`createCommentThread(uri, range)`）；
 //   - 标题区挂我们的命令（`comments/commentThread/title`）；
-//   - `canReply: true` 提供的输入框**就是编辑器内的 Quick Edit 输入框**；
-//   - `collapsibleState: Expanded` 让它一出现就是展开的。
+//   - `canReply: true` 提供的输入框**就是编辑器内的 Quick Edit 输入框**。
 //
-// 打扰控制（缺一不可，否则线程会堆得到处都是）：
-//   - 防抖 250ms（鼠标拖选过程中不反复建线程）；
-//   - 选区为空/零长度 → dispose；
+// **2026-09-17 语义变更（真机反馈）**：原先"一划选就自动挂线程"，但 VS Code 会把该线程的
+// 展开按钮固定渲染在**行号左侧**，用户明确要求去掉那个常驻按钮。
+// 现在改为**按需创建**：平时选区变化只 `clear()` 不创建；只有用户点了 `✨ Quick Edit`
+// （`openForCurrentSelection()`）才建线程并展开——于是"按钮只在你要用它的时候才出现"，
+// 而编辑器内输入框这条链路完全保留。
+//
+// 打扰控制：
+//   - 选区为空/零长度 → 不建（openForCurrentSelection 内部校验）；
 //   - 同 range 同文本 → 复用不重建（避免闪烁与滚动跳动）；
 //   - 选区变化、编辑器失焦、文档关闭 → 旧线程 dispose（只保留一个活动线程）；
-//   - 设置 `dsh.selection.threads.enabled` 可整体关闭。
+//   - 设置 `dsh.selection.threads.enabled` 可整体关闭（关闭后 Quick Edit 退化为 InputBox）。
 import * as vscode from 'vscode'
 import {
   shouldOfferThread,
@@ -43,17 +47,20 @@ export interface SelectionThreadDeps {
   /** 设置开关 */
   enabled(): boolean
   /**
+   * 展开线程（生产 = `thread.collapsibleState = Expanded`）。
+   * 按需创建时用它把回复输入框直接亮出来，省掉用户再点一次。
+   */
+  expandThread?(thread: unknown): void
+  /**
    * 是否处于"程序化选区"静音窗（默认 false）。
-   * 跳行定位等我们自己设置的选区必须静音，否则会凭空弹出评论线程。
+   * 跳行定位等我们自己设置的选区必须静音，否则用户刚点完卡片就被问"要不要 Quick Edit"。
    */
   suppressed?(): boolean
-  /** 防抖毫秒（默认 250） */
-  debounceMs?: number
   log?(message: string): void
 }
 
 /**
- * 选区线程控制器。
+ * 选区线程控制器（**按需创建**，见文件头说明）。
  *
  * 线程本身只做两件事：显示"选了几行 / 引用是什么"，以及**充当输入框**。
  * 用户在线程回复框里输入的文本由扩展侧的 `onDidSubmitCommentReply` 接走（走 F11 的发送链路）；
@@ -62,49 +69,46 @@ export interface SelectionThreadDeps {
 export class SelectionThreadController {
   private thread: unknown
   private lastKey: string | undefined
-  private timer: NodeJS.Timeout | undefined
 
   constructor(private readonly deps: SelectionThreadDeps) {}
 
-  /** 选区变化时调用（内部防抖） */
+  /**
+   * 选区变化时调用：**只清不建**。
+   *
+   * 线程是按需创建的，选区一变它的锚点就失效了 → 立刻清掉，避免线程停留在错误的位置上。
+   * （此处不再防抖：已经不创建东西了，dispose 很廉价，留着反而让旧线程多停 250ms。）
+   */
   onSelectionChanged(): void {
-    if (this.timer !== undefined) clearTimeout(this.timer)
-    const delay = this.deps.debounceMs ?? 250
-    this.timer = setTimeout(() => {
-      this.timer = undefined
-      this.apply()
-    }, delay)
+    this.clear()
   }
 
-  /** 立即应用一次（测试与"设置变更后刷新"用） */
-  apply(): void {
-    // 程序化选区（跳行定位）：既不新建线程，也要把旧线程清掉——光标已经跳走了，线程留着就是错位
-    if (this.deps.suppressed?.() === true) {
-      this.clear()
-      return
-    }
+  /**
+   * 按需创建/复用当前选区的线程（供 `dsh.selection.quickEdit` 调用）。
+   * @returns 线程对象；不满足条件（未开启 / 静音 / 无活动编辑器 / 零长度或纯空白选区）→ undefined
+   */
+  openForCurrentSelection(): unknown {
+    if (this.deps.suppressed?.() === true) return undefined
     const editor = this.deps.activeEditor()
-    if (editor === undefined) {
-      this.clear()
-      return
-    }
+    if (editor === undefined) return undefined
     const info = this.infoOf(editor)
     // 显式判空：shouldOfferThread 是布尔断言，TS 不会据此收窄 info
-    if (info === null || !shouldOfferThread(info, this.deps.enabled())) {
-      this.clear()
-      return
-    }
+    if (info === null || !shouldOfferThread(info, this.deps.enabled())) return undefined
     const key = `${info.path}|${info.startLine}|${info.endLine}|${info.text}`
-    if (key === this.lastKey && this.thread !== undefined) return // 同选区同文本：不重建（避免闪烁）
+    if (key === this.lastKey && this.thread !== undefined) {
+      this.deps.expandThread?.(this.thread) // 同选区：复用并确保展开
+      return this.thread
+    }
     this.clear()
     const range = this.deps.range(info.startLine - 1, info.endLine - 1)
     const body = this.deps.markdown(threadBody(info))
     this.thread = this.deps.createThread(this.deps.uri(info.path), range, body)
     this.lastKey = key
-    this.deps.log?.(`selection-thread: ${threadBody(info)}`)
+    this.deps.expandThread?.(this.thread)
+    this.deps.log?.(`selection-thread: 按需创建 ${threadBody(info)}`)
+    return this.thread
   }
 
-  /** 释放当前线程（选区取消 / 失焦 / 关闭文档 / 扩展停用） */
+  /** 释放当前线程（选区变化 / 失焦 / 关闭文档 / 发送完成 / 扩展停用） */
   clear(): void {
     if (this.thread !== undefined) {
       this.deps.disposeThread(this.thread)
@@ -118,7 +122,7 @@ export class SelectionThreadController {
     return this.thread !== undefined
   }
 
-  /** 当前线程（供"Quick Edit 按钮展开它"这类 UI 动作用；无则 undefined） */
+  /** 当前线程（供 UI 动作取用；无则 undefined） */
   currentThread(): unknown {
     return this.thread
   }
@@ -132,8 +136,6 @@ export class SelectionThreadController {
   }
 
   dispose(): void {
-    if (this.timer !== undefined) clearTimeout(this.timer)
-    this.timer = undefined
     this.clear()
   }
 }
