@@ -347,9 +347,16 @@ export class DiffService {
       }),
       ranges: [] as vscode.Range[],
     };
+    // 纯删除 = **边界标记**，不是"这一行被删"（用户拍板，2026-09-17 真机验收）：
+    // 被删内容在文档里没有实体行，装饰只能落在"后继存留行"上；此前用整行红底填充，
+    // 用户读成"这行被删了"（删 3 行只标 1 行、且标的是没被删的那行）。
+    // 现改为在该行**上边缘**画一条红色边线——位置正是"内容被移除的那个接缝"，
+    // 读作"这里少了一段"，不再声称某行被删。删除内容由行尾 `⇠ 原: (N 行) …` 与 hover 全量 diff 承载。
     const del = {
       type: this.deps.window.createTextEditorDecorationType({
-        backgroundColor: 'rgba(229, 57, 53, 0.22)',
+        borderWidth: '2px 0 0 0',
+        borderStyle: 'solid',
+        borderColor: 'rgba(229, 57, 53, 0.85)',
         overviewRulerColor: 'rgba(229, 57, 53, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
       }),
