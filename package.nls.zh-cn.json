@@ -57,5 +57,10 @@
   "dsh.cmd.selectionAddToDsh.title": "把选区加入 DSH",
   "dsh.cmd.selectionSubmitReply.title": "发送到 DSH",
   "dsh.config.interactionOnlyWhenPanelHidden": "DSH 面板可见时，把审批 / 提问交给面板处理，不在 VS Code 弹模态框或选择框（避免同一件事问两遍）。关掉则始终在 VS Code 弹。",
-  "dsh.config.selectionLensEnabled": "选区工具条：划选后在**选区首行上方**常驻显示「添加到 DSH / Quick Edit」两个可点按钮（CodeLens 版）。关掉则只在编辑区右键菜单与快捷键里可用。"
+  "dsh.config.selectionLensEnabled": "选区工具条：划选后在**选区首行上方**常驻显示「添加到 DSH / Quick Edit」两个可点按钮（CodeLens 版）。关掉则只在编辑区右键菜单与快捷键里可用。",
+  "dsh.config.changesEnabled": "**变更集总开关**（F1–F5）。关闭后：不再记录 DSH 的改动、编辑区不再出现三色高亮与 hover 处置、`F8`/`Shift+F8` 交还 VS Code 原本的「下一个问题」、`DSH 变更` 树与行内 CodeLens 不再显示。\n\n> 关闭会同时**清空已有标记与账本**（含跨 Reload 的持久记录），重新打开不会恢复历史——这是有意的：开关要让状态真正安静，而不是只藏 UI。",
+  "dsh.config.checkpointsEnabled": "**检查点总开关**（F9）。关闭后：完全不读 `~/.dsh/change-ledger`（省 I/O）、`DSH 检查点` 视图为空、`恢复到该轮之前` 等命令提示已关闭且不会发起任何恢复请求。\n\n> 检查点只存在于常规 git 工作区；非 git 工作区本来就只有空态提示。",
+  "dsh.config.ideInteractionEnabled": "**交互增强总开关**（F6 审批闸门 / F7 完成通知 / F8 提问与计划审阅 / F10 选区工具条）。关闭后这些交互一律不在 VS Code 出现，全部交回 DSH 面板：不弹审批模态框、不弹提问选择框、不弹完成通知、选中文本不再出现工具条与编辑器内输入框。\n\n> 只想用「文件跳转 + 变更可视化」而不想让 IDE 插话时，用这一项一键关掉全部 IDE 侧交互；下面的细分项仍可单独控制。",
+  "dsh.config.quickEditEnabled": "**Quick Edit 总开关**（F11）。关闭后：`Alt+K`、编辑器右键「用指令改这段代码」、选区线程里的「Quick Edit / 发送到 DSH」都提示已关闭，**不会**向 DSH 发送任何指令（不消耗模型调用）。\n\n> 不影响「Add to DSH / 将选区添加到 DSH」——那只是把引用写进输入框草稿，不会自动发送。",
+  "dsh.config.statusbarAgentEnabled": "是否在状态栏显示 **DSH agent 状态项**（F7：运行中 · 第 N 轮 / 等待审批 / 空闲）。关闭后只隐藏这一个状态项，不影响「服务状态」项，也不影响完成通知。"
 }

@@ -35,6 +35,13 @@ export interface ChangeNavigationDeps {
   /** 用户可见提示（无活动文件 / 该文件无变更 / 锚点失效） */
   notify(message: string): void
   log?(message: string): void
+  /**
+   * 变更集总开关（`dsh.changes.enabled`）的实时读取口（可选，缺省视为开启）。
+   *
+   * 关闭时 `next` / `prev` 直接 no-op：命令面板里仍可执行，但**不**弹提示、不写状态栏——
+   * 用户已经明确关掉了这个功能，再弹一句"当前文件没有 DSH 变更"就是噪音。
+   */
+  enabled?(): boolean
 }
 
 /**
@@ -80,6 +87,8 @@ export class ChangeNavigator {
   }
 
   private async step(dir: NavDirection): Promise<void> {
+    // 变更集关闭：整体静默（见 deps.enabled 注释）
+    if (!(this.deps.enabled?.() ?? true)) return
     const editor = this.deps.activeEditor()
     if (editor === undefined) {
       this.deps.notify('请先打开一个文件，再按 F8 / Shift+F8 游走 DSH 变更')

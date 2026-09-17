@@ -20,6 +20,12 @@ test('合法配置原样通过', () => {
     quickEditConfirmBeforeSend: true,
     // F6/F8 策略 B：面板可见时审批/提问交回面板
     interactionOnlyWhenPanelHidden: true,
+    // 粗粒度总开关：默认全开（升级不改变老用户体验）
+    changesEnabled: true,
+    checkpointsEnabled: true,
+    ideInteractionEnabled: true,
+    quickEditEnabled: true,
+    statusbarAgentEnabled: true,
   });
 });
 
@@ -101,4 +107,34 @@ test('executablePath：非字符串静默回退空串', () => {
 test('executablePath：合法值原样通过（含空串）', () => {
   assert.equal(normalizeConfig({ executablePath: 'C:\\tools\\dsh.cmd' }).config.executablePath, 'C:\\tools\\dsh.cmd');
   assert.equal(normalizeConfig({ executablePath: '' }).config.executablePath, '');
+});
+
+test('粗粒度总开关：缺省全开、合法值原样通过、非法值静默回退', () => {
+  // 缺省：升级即保持现有行为（不会因为新增开关而"悄悄关掉功能"）
+  const d = normalizeConfig({}).config;
+  assert.equal(d.changesEnabled, true);
+  assert.equal(d.checkpointsEnabled, true);
+  assert.equal(d.ideInteractionEnabled, true);
+  assert.equal(d.quickEditEnabled, true);
+  assert.equal(d.statusbarAgentEnabled, true);
+
+  // 合法值原样通过（关闭必须真的能被关掉）
+  const off = normalizeConfig({
+    changesEnabled: false,
+    checkpointsEnabled: false,
+    ideInteractionEnabled: false,
+    quickEditEnabled: false,
+    statusbarAgentEnabled: false,
+  });
+  assert.deepEqual(off.errors, []);
+  assert.equal(off.config.changesEnabled, false);
+  assert.equal(off.config.checkpointsEnabled, false);
+  assert.equal(off.config.ideInteractionEnabled, false);
+  assert.equal(off.config.quickEditEnabled, false);
+  assert.equal(off.config.statusbarAgentEnabled, false);
+
+  // 非法值回退默认且不记错误（与其它布尔项同口径）
+  const bad = normalizeConfig({ changesEnabled: 'yes' as unknown as boolean });
+  assert.equal(bad.config.changesEnabled, true);
+  assert.deepEqual(bad.errors, []);
 });

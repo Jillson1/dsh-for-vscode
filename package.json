@@ -2,7 +2,7 @@
   "name": "dsh-for-vscode",
   "displayName": "DSH for VS Code",
   "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位），右键文件/选区即可添加到 DSH 输入框",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "Jillson1",
   "icon": "assets/icon.png",
   "license": "MIT",
@@ -320,12 +320,12 @@
       {
         "command": "dsh.change.next",
         "key": "f8",
-        "when": "editorTextFocus && dsh.hasFileChanges"
+        "when": "editorTextFocus && dsh.changeNavActive"
       },
       {
         "command": "dsh.change.prev",
         "key": "shift+f8",
-        "when": "editorTextFocus && dsh.hasFileChanges"
+        "when": "editorTextFocus && dsh.changeNavActive"
       }
     ],
     "viewsWelcome": [
@@ -555,6 +555,31 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "%dsh.config.selectionLensEnabled%"
+        },
+        "dsh.changes.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.changesEnabled%"
+        },
+        "dsh.checkpoints.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.checkpointsEnabled%"
+        },
+        "dsh.ideInteraction.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.ideInteractionEnabled%"
+        },
+        "dsh.quickEdit.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.quickEditEnabled%"
+        },
+        "dsh.statusbar.agent.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.statusbarAgentEnabled%"
         }
       }
     }

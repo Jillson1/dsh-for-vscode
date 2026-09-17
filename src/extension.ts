@@ -33,8 +33,7 @@ import { DiffService } from './bridge/diff-service';
 import { locateNewText } from './bridge/diff-tracker';
 import { ChangeBook, type RevertOutcome } from './bridge/change-book';
 import { ChangeNavigator } from './changes/change-navigation';
-import { ChangesTreeProvider, type ChangeTreeNode } from './changes/changes-tree';
-import {
+import { ChangesTreeProvider, type ChangeTreeNode } from './changes/changes-tree';import {
   normalizeNodes,
   summarizeKept,
   summarizeOutcomes,
@@ -65,6 +64,16 @@ let manager: ServiceManager | null = null;
 let output: vscode.OutputChannel | null = null;
 /** A 组修改服务（activate 内装配；命令 handler 经模块级引用） */
 let diffService: DiffService | null = null;
+
+/**
+ * 设置生效钩子（模块级转发）。
+ *
+ * 为什么需要它：`onConfigChanged` 是模块级函数，够不到 activate 作用域里的
+ * 树 / 导航 / lens / 状态栏 / 变更集这些实例；而"改开关必须立刻生效、不必重载窗口"
+ * 是这个需求的核心验收点（否则用户会以为开关坏了）。因此由 activate 注册一个闭包进来。
+ * 未注册时（激活早期）安全跳过。
+ */
+let onDshConfigChanged: (() => void) | null = null;
 
 /** 日志缓冲（供「复制日志」命令 dsh.copyLogs 使用；上限行数防内存膨胀） */
 const logBuffer: string[] = [];
@@ -148,6 +157,46 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const { config, errors } = readConfig();
   for (const err of errors) appendLog(`[config] ${err}`);
+
+  /**
+   * 交互增强总开关（`dsh.ideInteraction.enabled`）与细分开关的**合取**。
+   *
+   * 语义（粗粒度设计，用户 2026-09 拍板）：总开关关闭 = 全部 IDE 侧交互让位给面板；
+   * 细分项仍在总开关打开时各自生效（例如只想关选区工具条、留审批弹窗）。
+   * 做成函数而不是常量：开关必须能**热生效**（改设置不必重载窗口）。
+   */
+  const ideGate = (fine: 'approval' | 'question' | 'notify' | 'statusbar' | 'selectionThreads' | 'selectionLens'): boolean => {
+    const c = readConfig().config;
+    if (!c.ideInteractionEnabled) return false;
+    switch (fine) {
+      case 'approval':
+      case 'question':
+        return true; // F6/F8 的细分仍由 dsh.interaction.onlyWhenPanelHidden 决定"面板可见时归谁"
+      case 'notify':
+        return c.notifyOnTurnComplete;
+      case 'statusbar':
+        return c.statusbarAgentEnabled;
+      case 'selectionThreads':
+        return c.selectionThreadsEnabled;
+      case 'selectionLens':
+        return c.selectionLensEnabled;
+    }
+  };
+  /** Quick Edit 总开关（`dsh.quickEdit.enabled`）——与变更集/交互增强同款热生效 getter */
+  const quickEditGate = (): boolean => readConfig().config.quickEditEnabled;
+  /** Quick Edit 关闭时的统一提示（Alt+K / 右键菜单 / 线程发送 / runQuickEdit 共用一句话） */
+  const quickEditDisabledMsg =
+    'Quick Edit 已关闭（设置 dsh.quickEdit.enabled）——打开后才能用指令改这段代码。';
+  /** 检查点总开关（`dsh.checkpoints.enabled`） */
+  const checkpointsGate = (): boolean => readConfig().config.checkpointsEnabled;
+  /** 变更集总开关（`dsh.changes.enabled`） */
+  const changesGate = (): boolean => readConfig().config.changesEnabled;
+
+  appendLog(
+    `交互增强开关: changes=${config.changesEnabled} checkpoints=${config.checkpointsEnabled} ` +
+    `ideInteraction=${config.ideInteractionEnabled} quickEdit=${config.quickEditEnabled} ` +
+    `statusbarAgent=${config.statusbarAgentEnabled}`,
+  );
 
   // —— 环境信息头：版本/平台/可执行文件/关键配置，问题报告排查的第一手依据 ——
   appendLog('=== DSH 扩展环境信息 ===');
@@ -275,7 +324,7 @@ export function activate(context: vscode.ExtensionContext): void {
         changeCount: changeBook.count(),
         fileCount: changeBook.allPaths().length,
       },
-      { notifyOnTurnComplete: readConfig().config.notifyOnTurnComplete },
+      { notifyOnTurnComplete: ideGate('notify') },
     );
     agentState = next;
     agentStatus.update(next);
@@ -351,7 +400,12 @@ export function activate(context: vscode.ExtensionContext): void {
   function shouldDeferToPanel(kind: InteractionKind): boolean {
     const delivery = decideDelivery({
       kind,
-      onlyWhenPanelHidden: readConfig().config.interactionOnlyWhenPanelHidden,
+      // 交互增强总开关关闭 → 一律交回面板（等价于"面板永远可见"的处置口径）。
+      // 注意不能只是不弹窗：那样审批/提问会**没人回答**，DSH 会一直等——
+      // 交回面板才是"关掉 IDE 侧交互"的正确语义。
+      onlyWhenPanelHidden: ideGate(kind === 'approval' ? 'approval' : 'question')
+        ? readConfig().config.interactionOnlyWhenPanelHidden
+        : true,
       panelVisible: panelPrimary.isVisible() || panelSecondary.isVisible(),
     });
     if (delivery === 'panel') {
@@ -527,6 +581,8 @@ export function activate(context: vscode.ExtensionContext): void {
     log: (m) => appendLog(`[diff] ${m}`),
     workspaceRoot: workspaceRootGetter(),
     book: changeBook, // F1：record 写账本；keep/revert/清除标记同步移除
+    // 变更集总开关：关闭后 record / adoptFromBook 整体早退（不读文件、不入栈、不写账本、不画高亮）
+    recordingEnabled: () => readConfig().config.changesEnabled,
   });
   // 局部非空引用（模块级 diffService 供命令 handler 使用；activate 内用 ds 避免 null 收窄）
   const ds = diffService;
@@ -578,6 +634,8 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     notify: (m) => void vscode.window.showInformationMessage(m),
     log: (m) => appendLog(`[nav] ${m}`),
+    // 变更集总开关：关闭后 F8/Shift+F8 静默 no-op（键位本身也由 dsh.changesEnabled 上下文键让位）
+    enabled: () => readConfig().config.changesEnabled,
   });
 
   const changesTree = new ChangesTreeProvider({
@@ -587,6 +645,8 @@ export function activate(context: vscode.ExtensionContext): void {
       return fs.readFile(p, 'utf8');
     },
     log: (m) => appendLog(`[tree] ${m}`),
+    // 变更集总开关：关闭后树为空（也不做 stale 的磁盘哈希比对）
+    enabled: () => readConfig().config.changesEnabled,
   });
   const changesView = vscode.window.createTreeView('dsh.changes', {
     treeDataProvider: changesTree,
@@ -598,6 +658,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // F5：变更行内 CodeLens（保留 / 丢弃 / 对比）——数据源同为账本，账本一变即重算
   const changeLenses = new ChangeCodeLensProvider({
     book: changeBook,
+    // 变更集总开关：关闭后不出「保留 / 丢弃 / 对比」按钮
+    enabled: () => readConfig().config.changesEnabled,
     log: (m) => appendLog(`[lens] ${m}`),
   });
 
@@ -628,7 +690,7 @@ export function activate(context: vscode.ExtensionContext): void {
           lastSelectionKind === vscode.TextEditorSelectionChangeKind.Keyboard,
       };
     },
-    enabled: () => readConfig().config.selectionLensEnabled,
+    enabled: () => ideGate('selectionLens'),
     log: (m) => appendLog(`[lens] ${m}`),
   });
 
@@ -732,16 +794,20 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   /**
-   * 维护上下文键 `dsh.hasFileChanges`：F8 / Shift+F8 只在"当前文件确有 DSH 变更"时接管。
+   * 维护上下文键 `dsh.changeNavActive`：F8 / Shift+F8 只在"当前文件确有 DSH 变更**且变更集开关打开**"时接管。
    *
    * 为什么要门控：F8 是 VS Code 内置的"下一个问题"（problems / 诊断跳转），无条件抢占会
    * 破坏用户已有的工作流。门控后语义变成"有 DSH 变更时 F8 走变更导航，否则维持原行为"，
-   * 这也是贡献点里 `when: editorTextFocus && dsh.hasFileChanges` 的来源。
+   * 这也是贡献点里 `when: editorTextFocus && dsh.changeNavActive` 的来源。
+   * 变更集总开关关闭时这个键恒为 false → F8 自动交还 VS Code，无需改键位本身。
    */
   function updateChangeContext(): void {
     const ed = vscode.window.activeTextEditor;
-    const has = ed !== undefined && changeBook.recordsForPath(ed.document.uri.fsPath).length > 0;
-    void vscode.commands.executeCommand('setContext', 'dsh.hasFileChanges', has);
+    // 变更集关闭时**不接管 F8**：让 VS Code 回到它原本的"下一个问题"（宁可少一层全局劫持）。
+    // 键位 when 用的是 dsh.changeNavActive，等价于"当前文件确有 DSH 变更 且 变更集开关打开"。
+    const has =
+      changesGate() && ed !== undefined && changeBook.recordsForPath(ed.document.uri.fsPath).length > 0;
+    void vscode.commands.executeCommand('setContext', 'dsh.changeNavActive', has);
   }
 
   // F9：DSH 检查点（只读 change-ledger；恢复走同源 /turn-rewind）
@@ -772,6 +838,9 @@ export function activate(context: vscode.ExtensionContext): void {
     fs: checkpointFs,
     log: (m) => appendLog(`[checkpoint] ${m}`),
   });
+  /** 检查点关闭时的统一提示（树、diff、恢复三处共用同一句话，避免三种说法） */
+  const checkpointsDisabledMsg =
+    'DSH 检查点功能已关闭（设置 dsh.checkpoints.enabled）——打开后即可查看与恢复。';
   const checkpointContent = new CheckpointContentProvider(checkpointStore);
   const checkpointsTree = new CheckpointTreeProvider({
     store: checkpointStore,
@@ -780,6 +849,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const { promises: fs } = await import('node:fs');
       return fs.readFile(p, 'utf8');
     },
+    // 检查点总开关：关闭后树为空且不触盘
+    enabled: () => checkpointsGate(),
     log: (m) => appendLog(`[checkpoint] ${m}`),
   });
   const checkpointsView = vscode.window.createTreeView('dsh.checkpoints', {
@@ -828,6 +899,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   /** 对比：检查点快照 ↔ 当前文件（原生 diff） */
   async function diffCheckpoint(node: CheckpointTreeNode): Promise<void> {
+    if (!checkpointsGate()) return void vscode.window.showInformationMessage(checkpointsDisabledMsg);
     if (node.kind !== 'drift') return;
     if (node.drift.blob === undefined) {
       void vscode.window.showWarningMessage('该条目没有内容快照（可能是目录或特殊文件），无法对比');
@@ -850,6 +922,7 @@ export function activate(context: vscode.ExtensionContext): void {
    * 也就是"先看得到要改什么"是引擎强制的，扩展只是顺着它走并补一次模态确认。
    */
   async function restoreCheckpoint(node: CheckpointTreeNode): Promise<void> {
+    if (!checkpointsGate()) return void vscode.window.showInformationMessage(checkpointsDisabledMsg);
     if (node.kind !== 'checkpoint') return;
     const cp = node.checkpoint;
     if (cp.sessionId === undefined || cp.turnStartSeq === undefined) {
@@ -927,8 +1000,12 @@ ${sample}${more}`,
 
   /** F11：把指令发给 DSH 当前会话（确认策略与失败提示都在 quick-edit.ts 里） */
   async function runQuickEdit(info: SelectionInfo, instruction: string): Promise<void> {
+    if (!quickEditGate()) {
+      void vscode.window.showInformationMessage(quickEditDisabledMsg);
+      return;
+    }
     const result = await sendQuickEdit(info, instruction, {
-      confirmBeforeSend: () => readConfig().config.quickEditConfirmBeforeSend,
+      confirmBeforeSend: () => quickEditGate() && readConfig().config.quickEditConfirmBeforeSend,
       confirm: async (text) => {
         const SEND = '发送';
         const NEVER = '发送并不再询问';
@@ -976,7 +1053,7 @@ ${sample}${more}`,
     expandThread: (thread) => {
       (thread as vscode.CommentThread).collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
     },
-    enabled: () => readConfig().config.selectionThreadsEnabled,
+    enabled: () => ideGate('selectionThreads'),
     // 跳行定位等程序化选区要静音：否则每次点击卡片路径都会冒出一个评论线程（真机反馈缺陷）
     suppressed: () => selectionThreadsMuted(),
     log: (m) => appendLog(`[selection] ${m}`),
@@ -988,8 +1065,14 @@ ${sample}${more}`,
   // 也就是"线程输入框旁的那个动作按钮"点下去时把 { thread, text } 交给我们的命令。
   // 因此回复走命令（`dsh.selection.submitReply`），而"回车即发"由 Alt+K 的 InputBox 提供。
   function onSubmitReply(reply: vscode.CommentReply): void {
-    const info = currentSelection();
     const text = typeof reply.text === 'string' ? reply.text : '';
+    // 关闭后不给"退化为 InputBox"的惊喜：明确告知（该命令在面板开启时可能仍可见）
+    if (!quickEditGate() || !ideGate('selectionThreads')) {
+      void vscode.window.showInformationMessage(quickEditDisabledMsg);
+      appendLog(`[quickEdit] 已关闭（quickEdit=${quickEditGate()} threads=${ideGate('selectionThreads')}），丢弃线程回复`);
+      return;
+    }
+    const info = currentSelection();
     appendLog(`[quickEdit] 线程回复提交（${text.length} 字符）`);
     if (info === null) {
       void vscode.window.showInformationMessage('选区已失效，请重新选中要修改的代码');
@@ -1020,6 +1103,10 @@ ${sample}${more}`,
 
   /** Alt+K / 命令面板：Ask 一次指令再发送（不依赖线程是否可见） */
   async function quickEditFromInput(): Promise<void> {
+    if (!quickEditGate()) {
+      void vscode.window.showInformationMessage(quickEditDisabledMsg);
+      return;
+    }
     const info = currentSelection();
     if (info === null) {
       void vscode.window.showInformationMessage('请先选中要修改的代码');
@@ -1058,6 +1145,49 @@ ${sample}${more}`,
   new StatusBarController(manager);
   // F7：agent 状态项（与"服务状态"分开：一个是进程活着，一个是 agent 在干什么）
   const agentStatus = new AgentStatusController();
+  // F7 状态栏可见性：状态栏项**不支持 when 条件**，必须自己判断（见 statusbar.ts 的 setVisible）
+  agentStatus.setVisible(ideGate('statusbar'));
+
+  /**
+   * 设置生效分发：把开关的当前值推到各个"一直活着"的部件上。
+   *
+   * 三类动作：
+   *   ① 视觉刷新（树 / CodeLens / 选区工具条 / 状态栏 / 计数器）——让 UI 立刻反映新开关；
+   *   ② 上下文键（dsh.changeNavActive）——决定 F8 是否接管（变更集关闭时要交还 VS Code）；
+   *   ③ 清理残留（变更集关闭 → 清空账本 + 修改栈 + 全部高亮 + 关闭已挂的评论线程）。
+   *
+   * ③ 是必须的：开关的语义是"这些标记不再存在"，而不是"暂时看不见"——
+   * 只藏 UI 会让 Reload 后幽灵记录复活（账本仍在），也违反设置项里写下的承诺。
+   */
+  const applyConfigToUi = (): void => {
+    const { config } = readConfig();
+    if (!config.changesEnabled) {
+      // 账本（持久）+ 栈与高亮（内存）一起清：两者按 callId 对齐，只清一个必留残留
+      const before = changeBook.count();
+      changeBook.clear();
+      const cleared = ds.clearAllRecords();
+      changeCounter.hide();
+      if (before > 0 || cleared > 0) {
+        appendLog(`[config] 变更集已关闭：清除账本 ${before} 条 / 高亮与记录 ${cleared} 条`);
+      }
+    }
+    if (!ideGate('selectionThreads')) selectionThreads.clear(); // Comments 线程无法靠设置隐藏，必须 dispose
+    changesTree.refresh();
+    changeLenses.refresh();
+    selectionLenses.refresh();
+    checkpointsTree.refresh();
+    agentStatus.setVisible(ideGate('statusbar'));
+    updateChangeContext();
+    appendLog(
+      `[config] 开关已生效: changes=${config.changesEnabled} checkpoints=${config.checkpointsEnabled} ` +
+      `ideInteraction=${config.ideInteractionEnabled} quickEdit=${config.quickEditEnabled} ` +
+      `statusbarAgent=${config.statusbarAgentEnabled}`,
+    );
+  };
+  onDshConfigChanged = applyConfigToUi;
+  // 激活时先按当前开关把上下文键算一遍：F8 的 when 子句依赖它，
+  // 否则"上一次会话把变更集关掉后重载窗口"会让 F8 短暂处于错误状态
+  updateChangeContext();
 
   // 服务就绪后启动握手超时（若面板已打开）
   manager.onChange((s) => {
@@ -1166,6 +1296,17 @@ ${sample}${more}`,
     // 线程不再随选区自动创建（VS Code 会把它的展开按钮固定渲染在行号左侧，用户要求去掉那个常驻按钮），
     // 所以这里先按需建；不满足条件（选区无效 / 设置关闭 / 静音）时退化为 Alt+K 的 InputBox。
     vscode.commands.registerCommand('dsh.selection.quickEdit', () => {
+      // F11 总开关关闭时不给"退化为 InputBox"的惊喜：明确告知，避免用户以为按钮坏了
+      if (!quickEditGate()) {
+        void vscode.window.showInformationMessage(quickEditDisabledMsg);
+        return;
+      }
+      // 交互增强总开关 / 选区线程关闭时，线程不会按需创建 → 退化为 Alt+K 的 InputBox（既有语义）
+      if (!ideGate('selectionThreads')) {
+        appendLog('[selection] 线程已关闭（dsh.ideInteraction.enabled / dsh.selection.threads.enabled），走 InputBox');
+        void quickEditFromInput();
+        return;
+      }
       const thread = selectionThreads.openForCurrentSelection() as vscode.CommentThread | undefined;
       if (thread === undefined) {
         appendLog('[selection] Quick Edit：无法按需创建线程（选区无效/设置关闭），退化为 InputBox');
@@ -1381,8 +1522,11 @@ async function openSecondary(context: vscode.ExtensionContext): Promise<void> {
   await showSecondaryGuideOnce(context);
 }
 
-/** 配置变更：host/port 变化时自动重启自启服务，退出策略实时生效 */
+/** 配置变更：host/port 变化时自动重启自启服务，退出策略实时生效，交互增强开关立即生效 */
 function onConfigChanged(): void {
+  // 开关类设置要**立即**落到各个活着的部件上（不重载窗口）——
+  // 顺序无关，但必须放在 manager 早退之前：服务未起时用户仍可能改开关。
+  onDshConfigChanged?.();
   const m = manager;
   if (!m) return;
   const { config } = readConfig();

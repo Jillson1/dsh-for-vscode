@@ -31,7 +31,7 @@ function bookWithTwoChanges(): ChangeBook {
 }
 
 /** 组装导航器 + 可观察的行为记录 */
-function makeNav(book: ChangeBook, options: { content?: string; noEditor?: boolean } = {}) {
+function makeNav(book: ChangeBook, options: { content?: string; noEditor?: boolean; enabled?: boolean } = {}) {
   const revealed: { path: string; line: number }[] = [];
   const statuses: (string | undefined)[] = [];
   const notices: string[] = [];
@@ -48,12 +48,12 @@ function makeNav(book: ChangeBook, options: { content?: string; noEditor?: boole
     status: (text) => statuses.push(text),
     notify: (m) => notices.push(m),
     log: (m) => logs.push(m),
+    enabled: () => options.enabled ?? true,
   });
   return { nav, revealed, statuses, notices, logs };
 }
 
-test('无活动编辑器 → 提示用户，不写状态栏', async () => {
-  const { nav, revealed, statuses, notices } = makeNav(bookWithTwoChanges(), { noEditor: true });
+test('无活动编辑器 → 提示用户，不写状态栏', async () => {  const { nav, revealed, statuses, notices } = makeNav(bookWithTwoChanges(), { noEditor: true });
   await nav.next();
   assert.deepEqual(revealed, []);
   assert.deepEqual(statuses, []);
@@ -139,4 +139,19 @@ test('clearCursor 清除状态栏；linesForActiveFile 暴露当前文件的可�
   assert.deepEqual(info, { path: 'D:/w/a.ts', lines: [2, 4] });
   nav.clearCursor();
   assert.deepEqual(statuses, [undefined]);
+});
+
+test('变更集总开关关闭：next/prev 静默 no-op（不跳转、不写状态栏、不弹提示）', async () => {
+  const { nav, revealed, statuses, notices } = makeNav(bookWithTwoChanges(), { enabled: false });
+  await nav.next();
+  await nav.prev();
+  assert.deepEqual(revealed, [], '关闭后不应跳转');
+  assert.deepEqual(statuses, [], '关闭后不应写状态栏（包括清除）');
+  assert.deepEqual(notices, [], '关闭后不应弹"没有 DSH 变更"这类提示——用户已经明确关掉了');
+});
+
+test('变更集总开关开启：行为不受影响（对照组，防止门控写反）', async () => {
+  const { nav, revealed } = makeNav(bookWithTwoChanges(), { enabled: true });
+  await nav.next();
+  assert.equal(revealed.length, 1);
 });

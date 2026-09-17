@@ -35,6 +35,11 @@ export interface CheckpointTreeDeps {
   workspaceRoot(): string | undefined
   /** 读当前文件文本（算哈希）；失败表示文件不存在 */
   readFileText(path: string): Promise<string>
+  /**
+   * 检查点总开关（`dsh.checkpoints.enabled`）的实时读取口（可选，缺省视为开启）。
+   * 关闭时树为空且**一次磁盘都不读**（省掉 manifest 枚举与 blob 哈希比对）。
+   */
+  enabled?(): boolean
   log?(message: string): void
 }
 
@@ -86,6 +91,7 @@ export class CheckpointTreeProvider implements vscode.TreeDataProvider<Checkpoin
   }
 
   async getChildren(node?: CheckpointTreeNode): Promise<CheckpointTreeNode[]> {
+    if (!(this.deps.enabled?.() ?? true)) return [] // 检查点关闭：空树，且不触盘
     if (node === undefined) return this.rootNodes()
     if (node.kind === 'checkpoint') return this.driftNodes(node.checkpoint, node.workspaceHash)
     return []

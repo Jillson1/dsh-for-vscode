@@ -13,6 +13,11 @@ import type { ChangeBook } from '../bridge/change-book'
 /** CodeLens 依赖（生产接 vscode；测试可注入假实现） */
 export interface ChangeCodeLensDeps {
   book: ChangeBook
+  /**
+   * 变更集总开关（`dsh.changes.enabled`）的实时读取口（可选，缺省视为开启）。
+   * 关闭时不出任何按钮——与 hover 处置一起消失（见 diff-service 的 recordingEnabled 同款语义）。
+   */
+  enabled?(): boolean
   log?(message: string): void
 }
 
@@ -87,6 +92,7 @@ export class ChangeCodeLensProvider implements vscode.CodeLensProvider {
   }
 
   provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+    if (!(this.deps.enabled?.() ?? true)) return [] // 变更集关闭：不出按钮
     const path = document.uri.fsPath
     const records = this.deps.book.recordsForPath(path)
     if (records.length === 0) return []

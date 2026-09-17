@@ -28,6 +28,16 @@ export interface RawDshConfig {
   quickEditConfirmBeforeSend?: boolean;
   /** 面板可见时是否把审批/提问交给面板（dsh.interaction.onlyWhenPanelHidden） */
   interactionOnlyWhenPanelHidden?: boolean;
+  /** F1–F5 变更集总开关（dsh.changes.enabled） */
+  changesEnabled?: boolean;
+  /** F9 检查点总开关（dsh.checkpoints.enabled） */
+  checkpointsEnabled?: boolean;
+  /** F6–F8/F10 交互增强总开关（dsh.ideInteraction.enabled） */
+  ideInteractionEnabled?: boolean;
+  /** F11 Quick Edit 总开关（dsh.quickEdit.enabled） */
+  quickEditEnabled?: boolean;
+  /** F7 agent 状态栏项可见性（dsh.statusbar.agent.enabled） */
+  statusbarAgentEnabled?: boolean;
 }
 
 /** 规范化后的配置（均有合法默认值） */
@@ -55,6 +65,16 @@ export interface DshConfig {
   quickEditConfirmBeforeSend: boolean;
   /** 面板可见时是否把审批/提问交给面板（策略 B，默认开） */
   interactionOnlyWhenPanelHidden: boolean;
+  /** F1–F5 变更集总开关（账本 / 高亮 / F8 导航 / 变更树 / CodeLens / hover 处置） */
+  changesEnabled: boolean;
+  /** F9 检查点总开关（树 + blob diff + 恢复） */
+  checkpointsEnabled: boolean;
+  /** F6–F8/F10 交互增强总开关（审批 / 提问 / 选区线程工具条 / 编辑器内输入框） */
+  ideInteractionEnabled: boolean;
+  /** F11 Quick Edit 总开关 */
+  quickEditEnabled: boolean;
+  /** F7 agent 状态栏项可见性 */
+  statusbarAgentEnabled: boolean;
 }
 
 /** 默认配置 */
@@ -76,6 +96,13 @@ export const DEFAULTS: DshConfig = {
   quickEditConfirmBeforeSend: true,
   // 策略 B：面板可见时审批/提问交回面板处理（避免同一问题问两遍、模态框抢焦点）
   interactionOnlyWhenPanelHidden: true,
+  // —— 粗粒度总开关（全部默认开：升级即保持现有行为，不改变老用户体验）——
+  // 关闭后对应功能整体静默：不记录、不显示、不弹窗、不接管键位（详见各设置项描述）
+  changesEnabled: true,
+  checkpointsEnabled: true,
+  ideInteractionEnabled: true,
+  quickEditEnabled: true,
+  statusbarAgentEnabled: true,
 };
 
 /** 安全边界：仅允许回环地址 */
@@ -157,6 +184,17 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
     typeof raw.interactionOnlyWhenPanelHidden === 'boolean'
       ? raw.interactionOnlyWhenPanelHidden
       : DEFAULTS.interactionOnlyWhenPanelHidden;
+  // 粗粒度总开关：与其它布尔项同一口径（仅接受布尔，否则回退默认且不记错误）
+  const changesEnabled =
+    typeof raw.changesEnabled === 'boolean' ? raw.changesEnabled : DEFAULTS.changesEnabled;
+  const checkpointsEnabled =
+    typeof raw.checkpointsEnabled === 'boolean' ? raw.checkpointsEnabled : DEFAULTS.checkpointsEnabled;
+  const ideInteractionEnabled =
+    typeof raw.ideInteractionEnabled === 'boolean' ? raw.ideInteractionEnabled : DEFAULTS.ideInteractionEnabled;
+  const quickEditEnabled =
+    typeof raw.quickEditEnabled === 'boolean' ? raw.quickEditEnabled : DEFAULTS.quickEditEnabled;
+  const statusbarAgentEnabled =
+    typeof raw.statusbarAgentEnabled === 'boolean' ? raw.statusbarAgentEnabled : DEFAULTS.statusbarAgentEnabled;
 
   return {
     config: {
@@ -164,6 +202,7 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
       silenceWarning, executablePath, notifyOnTurnComplete, selectionThreadsEnabled, selectionLensEnabled,
       quickEditConfirmBeforeSend,
       interactionOnlyWhenPanelHidden,
+      changesEnabled, checkpointsEnabled, ideInteractionEnabled, quickEditEnabled, statusbarAgentEnabled,
     },
     errors,
   };
@@ -187,5 +226,11 @@ export function readConfig(): { config: DshConfig; errors: string[] } {
     selectionLensEnabled: ws.get<boolean>('selection.lens.enabled'),
     quickEditConfirmBeforeSend: ws.get<boolean>('quickEdit.confirmBeforeSend'),
     interactionOnlyWhenPanelHidden: ws.get<boolean>('interaction.onlyWhenPanelHidden'),
+    // 粗粒度总开关
+    changesEnabled: ws.get<boolean>('changes.enabled'),
+    checkpointsEnabled: ws.get<boolean>('checkpoints.enabled'),
+    ideInteractionEnabled: ws.get<boolean>('ideInteraction.enabled'),
+    quickEditEnabled: ws.get<boolean>('quickEdit.enabled'),
+    statusbarAgentEnabled: ws.get<boolean>('statusbar.agent.enabled'),
   });
 }

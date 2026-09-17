@@ -92,6 +92,13 @@ export interface DiffServiceDeps {
    * 生产由扩展入口维护（收到带 sessionId 的上行消息即更新）。
    */
   sessionId?: () => string | undefined;
+  /**
+   * 变更集总开关（`dsh.changes.enabled`）的实时读取口（可选，缺省视为开启）。
+   *
+   * 关闭时 `record` / `adoptFromBook` 整体早退：不读文件、不入栈、不写账本、不画高亮。
+   * 为什么做成 getter 而不是构造期常量：开关要能**热生效**（改设置不必重载窗口）。
+   */
+  recordingEnabled?: () => boolean;
 }
 
 /** 一个装饰桶：装饰类型 + 已收集的区间。 */
@@ -123,6 +130,12 @@ export class DiffService {
 
   /** 记录一条 applied diff：读文件 → 定位 newText 区域 → 高亮 + 入栈 + 写变更账本。 */
   async record(input: DiffInput): Promise<void> {
+    // 变更集总开关（dsh.changes.enabled，缺省开）：关闭后**不再记录**——
+    // 不读文件、不入栈、不写账本、不画高亮，整条链路的开销一起省掉。
+    if (!(this.deps.recordingEnabled?.() ?? true)) {
+      this.deps.log?.('record: 变更集已关闭（dsh.changes.enabled=false），忽略本次上报');
+      return;
+    }
     this.deps.log?.(
       `record: path=${input.path} diffs=${input.diffs.length} callId=${input.callId} source=${input.source ?? 'relay'}`,
     );
@@ -217,6 +230,12 @@ export class DiffService {
    * @returns 真正被采纳（栈里此前没有该 callId）的条数
    */
   adoptFromBook(records: readonly ChangeRecord[]): number {
+    // 变更集关闭时不把账本灌回修改栈（否则 Reload 后会凭空出现高亮）。
+    // 调用方（extension.ts）在关闭那一刻会清空账本，因此这里只需拦住"读回来的历史"。
+    if (!(this.deps.recordingEnabled?.() ?? true)) {
+      this.deps.log?.('adopt: 变更集已关闭（dsh.changes.enabled=false），跳过账本恢复');
+      return 0;
+    }
     let adopted = 0;
     for (const r of records) {
       if (this.stack.get(r.callId) !== undefined) continue; // 实时广播已经记过：不重复
@@ -811,6 +830,22 @@ export class DiffService {
   /** 修改记录数（无 path = 全部；有 path = 该文件）。 */
   recordCount(path?: string): number {
     return path === undefined ? this.stack.size : this.stack.forPath(path).length;
+  }
+
+  /**
+   * 清空**全部**记录与高亮（不碰文件内容）。
+   *
+   * 用途：变更集总开关（`dsh.changes.enabled`）被关闭的那一刻。
+   * 为什么必须整体清：账本是持久数据源、栈是内存态显示层，两者按 callId 对齐；
+   * 只清其中一个会留下"账本还在、高亮没了"（重载后幽灵记录复活）或反之。
+   * 语义务必与设置项描述一致：**关闭 = 这些标记不再存在**，而不是"暂时看不见"。
+   */
+  clearAllRecords(): number {
+    const cleared = this.stack.size;
+    for (const path of [...this.byPath.keys()]) this.clearDecorations(path);
+    this.stack.clear();
+    this.deps.log?.(`clearAll: 清空全部记录与高亮（${cleared} 条）`);
+    return cleared;
   }
 
   /** 清理全部 decoration（扩展停用）。 */

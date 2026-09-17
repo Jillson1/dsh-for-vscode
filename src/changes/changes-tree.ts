@@ -27,6 +27,11 @@ export interface ChangesTreeDeps {
   book: ChangeBook
   /** 读文件文本（算当前哈希 → stale 判定） */
   readFileText(path: string): Promise<string>
+  /**
+   * 变更集总开关（`dsh.changes.enabled`）的实时读取口（可选，缺省视为开启）。
+   * 关闭时树一律为空——连账本都不读（既不显示历史，也不做 stale 的磁盘哈希比对）。
+   */
+  enabled?(): boolean
   log?(message: string): void
 }
 
@@ -116,6 +121,7 @@ export class ChangesTreeProvider implements vscode.TreeDataProvider<ChangeTreeNo
   }
 
   async getChildren(node?: ChangeTreeNode): Promise<ChangeTreeNode[]> {
+    if (!(this.deps.enabled?.() ?? true)) return [] // 变更集关闭：树为空（不读账本、不碰磁盘）
     if (node === undefined) {
       const tree = await this.loadTree()
       return tree.map((view) => ({ kind: 'session', view }) as ChangeTreeNode)

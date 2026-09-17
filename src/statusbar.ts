@@ -1,7 +1,7 @@
 // src/statusbar.ts — 状态栏项：显示服务状态，点击打开面板
 import * as vscode from 'vscode';
 import { ServiceManager, type ServiceSnapshot } from './service/manager';
-import { agentStatusView, type AgentState } from './bridge/agent-state';
+import { agentStatusView, IDLE_AGENT_STATE, type AgentState } from './bridge/agent-state';
 import { t } from './i18n';
 
 /** 四种状态的图标 + 文案键 + 颜色主题 ID（绿/黄/红/灰） */
@@ -54,6 +54,8 @@ export class StatusBarController {
  */
 export class AgentStatusController {
   private item: vscode.StatusBarItem;
+  /** 最近一次收到的 agent 状态（可见性开关切换后要能立刻按新可见性重绘，而不是等下一次状态变化） */
+  private last: AgentState = IDLE_AGENT_STATE;
 
   constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
@@ -64,10 +66,27 @@ export class AgentStatusController {
 
   /** 应用一次 agent 状态（纯逻辑在 agent-state.ts，这里只落 UI） */
   update(state: AgentState): void {
+    this.last = state;
     const view = agentStatusView(state);
     this.item.text = view.text;
     this.item.tooltip = view.tooltip;
     this.item.color = new vscode.ThemeColor(view.color);
+  }
+
+  /**
+   * 设置这个状态项的可见性（`dsh.statusbar.agent.enabled` / `dsh.ideInteraction.enabled`）。
+   *
+   * 为什么要在这里做而不是靠 `when`：**状态栏项不支持 when 条件**（VS Code 的状态栏 API
+   * 只有 show/hide），所以可见性必须在扩展侧自己判断并调用。
+   * 隐藏时不改动已记录的 last，重新显示能立刻反映最新状态，不必等下一次会话状态变化。
+   */
+  setVisible(visible: boolean): void {
+    if (visible) {
+      this.update(this.last);
+      this.item.show();
+    } else {
+      this.item.hide();
+    }
   }
 
   dispose(): void {
