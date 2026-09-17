@@ -7,7 +7,9 @@
 
 **English** | [中文](README.zh.md)
 
-Use the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) web UI right inside VS Code: click a sidebar icon to embed DSH, which auto-starts (or reuses) the `dsh web` service — code and AI interface side by side, no more switching between terminal, browser, and IDE.
+Use [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) as a **real IDE-grade AI coding setup** inside VS Code. It is not just an embedded web page: it brings "which files the AI touched, where, and can I undo it" plus "the moment DSH needs your decision" right into the editor. Your code and the AI stay on one screen — no window switching, no browser tab juggling.
+
+> In one line: **DSH does the editing; VS Code makes it reviewable, actionable and undoable.**
 
 ## 📸 Screenshot
 
@@ -15,26 +17,95 @@ Use the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness
 
 ![DSH for VS Code demo](docs/screenshots/overview.gif)
 
+## 🎬 Demo video
+
+[![How to use DeepSeek Harness in VS Code? Use DSH!! (Bilibili)](docs/screenshots/video-cover.jpg)](https://www.bilibili.com/video/BV1p8bD6dE18)
+
+*59-second demo (Chinese): [BV1p8bD6dE18](https://www.bilibili.com/video/BV1p8bD6dE18)*
+
 ---
 
-## ✨ Features
+## ✨ Feature overview
 
-- 🖱️ **One-click open**: a DSH whale icon in both the left Activity Bar and the right Secondary Side Bar — click either to embed the DSH page in that sidebar;
-- 🚀 **Automatic service management**: auto-detects the port — reuses an already-running `dsh web`, otherwise starts one silently in the background and loads it once ready;
-- 🔄 **Live status sync**: four-state status bar indicator (running green / starting yellow / failed red / stopped gray); click it to toggle the panel;
-- 🛟 **Error fallbacks**: port occupied, `dsh` missing, start timeout, crash/disconnect — each has a dedicated page with one-click reconnect; if the configured port is taken by another program, the extension temporarily falls back to the first free port for that session, never a blank screen;
-- 🌐 **Bilingual UI**: copy follows the VS Code display language — Chinese for `zh-*`, English otherwise;
-- 📂 **File jumps**: clicking a file path in the panel opens the file in VS Code, with the changed line located precisely for `edit` cards and the read start line for `read` cards;
-- ➕ **Add to DSH**: right-click a file in the Explorer or a selection in the editor → "Add to DSH" writes the file reference (`@path` or `@path:start-end`) into the DSH input box as a draft, ready for you to review and send;
-- 📋 **Copy/Paste/Context menu, works out of the box**: fixes the macOS webview quirk where `Cmd+C` / `Cmd+V` and the right-click menu silently fail inside the embedded DSH page — the panel ships its own standard edit shortcut simulation and a context menu (Copy/Paste/Cut/Select All/Undo/Redo), while plain-browser usage and every existing feature stay untouched;
-- 🧹 **Clean exit**: closing the window stops the auto-started service, no zombie processes; manually started services are never touched;
-- 🔒 **Security boundary**: loopback addresses only (127.0.0.1 / localhost / [::1]); no credentials are read.
+| Group | Capability | One-liner |
+|---|---|---|
+| 🧭 Basics | Panel + file linking | Embedded DSH panel; click a file path to jump, `edit` lands on the changed line |
+| 📝 Change visualization | Three-color highlights + hover actions | See what changed, where, and how to undo it — in the editor |
+| 🗂️ Reviewable change set | Change ledger / navigation / tree / batch actions / inline buttons | Changes become persistent: survive a Reload, review one by one |
+| 🎛️ Editor as the frontend | Approval gate / status bar state machine / questions & plan review | Answer DSH where you are, without leaving VS Code |
+| ⏪ Cross-turn rollback | Checkpoints + native diff + one-click restore | Go back to "before turn N" (code only) |
+| ⚡ Edit in place | Selection toolbar + Quick Edit | Select lines, type an instruction, hit send |
+| ⚙️ Controllable | Every feature can be turned off | All on by default; silence anything instantly, no reload needed |
+
+## ✨ Feature details
+
+### 🧭 Panel and file linking
+
+- 🖱️ **One-click open**: a DSH whale icon in both the Activity Bar and the Secondary Side Bar; click either to embed the DSH web UI in that side bar;
+- 🚀 **Automatic service management**: probes the port — reuses an existing `dsh web`, otherwise starts one silently in the background and loads when ready;
+- 🔄 **Live status**: the status bar shows service state (running / starting / failed / stopped); click it to toggle the panel;
+- 🛟 **Error fallbacks**: busy port, missing `dsh`, startup timeout, crashed or unreachable service all get a readable notice and one-click retry — never a blank page; a port conflict falls back to a free port for that session;
+- 🌐 **Bilingual UI**: copy follows the VS Code display language — Chinese for `zh-*`, English otherwise (setting descriptions are bilingual too);
+- 📂 **File jumps**: click a file path in the panel to open it in VS Code — `edit` cards **jump to the exact changed line**, `read` cards to the read line, and it **only jumps** (no stray input box or comment thread);
+- ➕ **Add to DSH**: right-click a file/selection, or press <kbd>Alt</kbd>+<kbd>D</kbd>, to write `@path` or `@path:start-end` into the composer as a **draft** — you review it and send manually;
+- 📋 **Copy/paste/context menu that just works**: fixes broken `Cmd+C` / paste / right-click inside VS Code's embedded webview (macOS especially); a standalone browser is completely unaffected;
+- 🧹 **Clean exit**: stops the service it started when the last window closes; never touches a service you started yourself;
+- 🔒 **Security boundary**: loopback only (`127.0.0.1` / `localhost` / `[::1]`); never reads credentials.
+
+### 📝 Change visualization: see what the AI did
+
+As soon as DSH edits a file through `edit` / `write`:
+
+- 🟢 **Added lines in green**, 🔴 **deleted lines in red** (drawn as a seam marker so surviving lines are not smeared), 🟡 **replacements in amber**, mirrored in the overview ruler;
+- ↩️ an inline `⇠ was: …` hint at the end of the line shows the replaced/deleted original;
+- 🖱️ **Hover a changed line** → `DSH edit | add | delete`, +/- stats, a diff preview and **Discard / Keep / Show diff** buttons (multiple records on one line merge into a single hover);
+- 🛡️ **Safe discard**: if the original text is gone (you edited it yourself) it asks for confirmation; discarding a `write`-created file deletes it; pure appends only remove the part DSH wrote — **your own code is never harmed**;
+- 🧽 Escape hatch when marks drift: `DSH: Clear Marks (Keep Changes)`.
+
+### 🗂️ Reviewable change set: survives Reload, reviewed one by one
+
+- 💾 **Change ledger (ChangeBook)**: changes become **persistent objects** stored in workspace state — after `Developer: Reload Window`, reopening or switching sessions, **records and highlights are still there** and still actionable; the same edit is never recorded twice; files you edited yourself are marked stale (greyed out, "file modified externally") instead of being silently dropped;
+- 🧭 **Change navigation**: <kbd>F8</kbd> / <kbd>Shift</kbd>+<kbd>F8</kbd> walk through changes in the current file, with `DSH Changes 1/3` in the status bar (clicking it equals pressing F8), wrapping around at the end;
+  - ⚠️ **No regression to VS Code habits**: <kbd>F8</kbd> only takes over when the current file really has DSH changes; otherwise it stays VS Code's own "next problem";
+- 🗂️ **`DSH Changes` tree**: three levels — `session → file → change` (session nodes show "N files · M changes"); click to jump, right-click a node to **keep / discard**;
+- 🧨 **Batch actions** at single / **file** / **session** granularity, with <kbd>Ctrl</kbd> multi-select in the tree; the result message always includes the **failure reason breakdown** (e.g. `7 succeeded, 2 failed (original text no longer found (file was edited) ×2)`), and failed entries stay in the tree in red for a retry;
+- 🏷️ **Inline CodeLens**: `✅ Keep / ❌ Discard / 🔍 Diff` buttons permanently above changed lines — no hovering required; several changes on one line produce a single group (labelled `(2 changes)`); records whose anchor can no longer be located **show no buttons** (no false "this was edited here" claims).
+
+### 🎛️ Editor as the frontend: answer where you are
+
+- 🛂 **Approval gate**: when DSH needs permission for an out-of-scope action, VS Code shows a **modal** with "Allow once / Deny" — no switching back to the panel;
+  - 🔐 Only those two outcomes exist (DSH's payload does not support "always allow", so the UI **never makes a promise it cannot keep**); pressing <kbd>Esc</kbd> means **no answer** — DSH keeps waiting and you can reply in the panel;
+  - 🚫 Credential/secret style requests (tool names containing credential / secret / api-key / token / password / env) are **never answered by the IDE**; you are pointed back to the DSH panel;
+- 📊 **Agent status item**: a second status bar item, separate from service state — `$(sync~spin) DSH · running · turn N` / `$(bell) DSH · waiting for approval` / `$(check) DSH · idle`;
+- 🔔 **Completion notification**: when a turn finishes **and actually changed files**, you get `DSH turn 3 finished: 4 files changed` with a "View" button that focuses the changes tree; empty turns stay silent;
+- ❓ **Questions and plan review**: DSH questions surface in the IDE — options become a QuickPick (multi-select supported), free-form answers use an InputBox, and `plan-review` first renders the plan as a **read-only Markdown document** before asking you to approve or send back (optionally with a reason); multi-question batches are **answered all at once and returned as one payload** — cancelling any question abandons the whole batch;
+- 🧠 **No double-asking**: by default, approvals/questions are left to the panel while it is visible (`dsh.interaction.onlyWhenPanelHidden`) — if you are already looking at the panel, the IDE stays quiet.
+
+### ⏪ Cross-turn rollback: back to before a given turn
+
+- 🕐 **`DSH Checkpoints` view**: reads DSH's `change-ledger` and lists checkpoints per turn ("turn N · time · N files"); expanding shows the files modified or deleted since that turn;
+- 🔍 **Native diff**: click an entry to open VS Code's built-in diff editor (that turn's snapshot ↔ now);
+- ⏪ **One-click restore**: right-click → "Restore code to before this turn" → **preview** the affected file list → modal confirmation → apply, ending with `Restored N files to before that turn`;
+- 🧯 **Honest degradation**: regular git worktrees only (non-git workspaces show "no checkpoints in this workspace"); if another active session uses the same workspace it reports `WORKSPACE_IN_USE` instead of forcing its way; destructive actions are **never auto-retried**.
+
+### ⚡ Edit in place: selection toolbar + Quick Edit
+
+- 🎯 **Selection toolbar**: after you select code, `Add Selection to DSH` / `⚡ Quick Edit` appear above the first selected line, alongside an in-editor comment-thread input box;
+- 📝 **Add to DSH**: writes `@file:start-end` into the composer as a **draft** (not sent) so you can finish your prompt first;
+- ⚡ **Quick Edit**: type "debounce this" in the box and send — or press <kbd>Alt</kbd>+<kbd>K</kbd> and hit Enter — and DSH receives `@file:12-14 debounce this` and runs it;
+  - 🛑 A confirmation dialog (showing the full text) appears before the first send, with a "send and don't ask again" option; empty instructions are never sent, so **no model turn is spent on your behalf**;
+  - ⏸️ While DSH is busy the instruction is only written to the draft with a "DSH is running" notice — **nothing is preempted and nothing is lost**;
+- 🕊️ **Never intrusive**: only user selections trigger it (programmatic jumps do not), the cursor never moves, focus is never stolen, and zero-length or whitespace-only selections do nothing.
+
+### ⚙️ Controllable: every feature can be turned off
+
+Everything introduced in v1.2 has its own setting, **all enabled by default**, and **changes apply instantly with no window reload** (see [Settings](#️-settings-dsh)).
 
 ## 📥 Installation
 
 **Option 1: .vsix package (recommended)**
 
-1. Download the latest `dsh-vscode.vsix` from [Releases](https://github.com/Jillson1/dsh-for-vscode/releases);
+1. Download the latest `dsh-for-vscode-*.vsix` from [Releases](https://github.com/Jillson1/dsh-for-vscode/releases);
 2. In VS Code press `Ctrl+Shift+P` → run `Extensions: Install from VSIX...` → select the file;
 3. Reload the window (`Developer: Reload Window`).
 
@@ -44,80 +115,172 @@ Use the [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness
 git clone https://github.com/Jillson1/dsh-for-vscode.git
 cd dsh-for-vscode
 npm install
-npm run package        # produces dsh-vscode.vsix, then install as in Option 1
+npm run package        # produces dsh-vscode.vsix — install it as in option 1
 ```
 
-**Prerequisite**: the `dsh` CLI from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) must be installed and on your PATH (the extension detects it and shows a hint if missing).
+**Prerequisite**: the `dsh` CLI from [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) available on `PATH` (it is probed automatically, with a clear notice if missing).
+
+> 💡 The change set, approval gate, questions, checkpoints and Quick Edit require the companion DSH plugin **`@jillson1/dsh-file-jump`** (it provides replay, uplink forwarding and the same-origin restore call). With the extension alone those features look "unfinished".
 
 ## 🚀 Usage
 
-1. After installation, a DSH whale icon appears in both the left Activity Bar and the right Secondary Side Bar;
-2. Click either icon: the extension auto-starts (or reuses) `dsh web` and embeds the DSH page in that sidebar;
-   - Click the **right** icon → the panel opens on the right, leaving the file explorer untouched;
-   - If `dsh.port` is occupied by another program, the extension automatically switches to the first free port for this session only (your setting is unchanged; a notification tells you the temporary port);
-3. Panel title bar buttons: `Open in Browser` `Restart Service` `Stop Service` `Copy URL` `Show Logs`;
-4. The bottom status bar shows the service status; click it to toggle the panel.
+1. After installation a DSH whale icon appears in both the **Activity Bar** and the **Secondary Side Bar**;
+2. Click either icon: the extension starts (or reuses) `dsh web` and embeds the DSH web UI;
+   - The **right** icon opens the panel on the right, leaving the Explorer untouched;
+   - If `dsh.port` is taken, a free port is used for this session (with a notification; your setting is unchanged);
+3. Panel title bar: `Open in Browser` `Restart Service` `Stop Service` `Copy URL` `Show Logs`;
+4. The status bar shows both service and agent state; clicking toggles the panel;
+5. **Let DSH edit a few files**, then: press <kbd>F8</kbd> to review one by one → use hover or the inline buttons to keep/discard → open the `DSH Changes` tree in the Activity Bar for the big picture → use `DSH Checkpoints` when you want to roll back a turn.
 
-### Command palette (prefixed `DSH:`)
+### Typical workflows
+
+| What you want | How to do it |
+|---|---|
+| See exactly what the AI changed | Three-color highlights + hover diff preview, or `DSH: Show Diff` |
+| Review change by change | <kbd>F8</kbd> / <kbd>Shift</kbd>+<kbd>F8</kbd> (progress in the status bar), or the inline `Keep / Discard / Diff` buttons |
+| Undo one specific change | "Discard" in the hover, or right-click the node in the `DSH Changes` tree |
+| Undo a whole file or session | Right-click a **file** or **session** node (multi-select with <kbd>Ctrl</kbd> supported) |
+| Go back several turns | `DSH Checkpoints` view → right-click a checkpoint → restore to before that turn |
+| Ask DSH to edit the code I selected | Select → "⚡ Quick Edit" or <kbd>Alt</kbd>+<kbd>K</kbd> → type the instruction |
+| Reference this code in the conversation | Select → <kbd>Alt</kbd>+<kbd>D</kbd> (draft only, not sent) |
+| Approve an out-of-scope action | Choose "Allow once / Deny" in the VS Code modal |
+| Keep things quiet | Turn off `dsh.ideInteraction.enabled`, `dsh.changes.enabled`, etc. |
+
+## ⌨️ Keybindings and context menus
+
+| Action | Default key | Active when |
+|---|---|---|
+| Next change | <kbd>F8</kbd> | The current file really has DSH changes **and** the change-set switch is on (otherwise VS Code keeps its own behaviour) |
+| Previous change | <kbd>Shift</kbd>+<kbd>F8</kbd> | Same as above |
+| Add selection to DSH | <kbd>Alt</kbd>+<kbd>D</kbd> | Editor has a selection |
+| Quick Edit this selection | <kbd>Alt</kbd>+<kbd>K</kbd> | Editor has a selection |
+
+Context menu entries: Explorer / editor tab (`Add to DSH`), editor (`Add to DSH`, `Quick Edit This Selection`), `DSH Changes` nodes (keep/discard/batch), `DSH Checkpoints` nodes (diff/restore), comment thread title (`Add to DSH` / `Quick Edit`).
+
+## 🧰 Command palette (`DSH:`)
+
+**Panel and service**
 
 | Command | Description |
 |---|---|
 | `DSH: Open Panel` | Open the left panel |
 | `DSH: Open in Secondary Side Bar` | Open the right panel |
-| `DSH: Open in Browser` | Open the DSH page in the system browser |
-| `DSH: Restart Service` | Restart the extension-managed service |
-| `DSH: Stop Service` | Stop the extension-started service |
-| `DSH: Copy URL` | Copy the DSH page URL |
-| `DSH: Show Logs` | Open the extension log output channel |
-| `DSH: Copy Logs` | Copy the full DSH log (environment info + service log) to the clipboard for bug reports |
-| `DSH: Retry Bridge Install` | Reinstall the bridge and restart the service |
-| `DSH: Uninstall Bridge` | Remove the bridge package and restore `cordis.patch.yml` |
-| `DSH: Add to DSH` | Write the selected file path into the DSH input box (`@path`) |
-| `DSH: Add Selection to DSH` | Write the selected file path with line range into the DSH input box (`@path:start-end`) |
+| `Open in Browser` | Open the DSH page in your system browser |
+| `Restart Service` / `Stop Service` | Restart / stop the extension-managed service |
+| `Copy URL` | Copy the DSH page URL |
+| `Show Logs` / `DSH: Copy Logs` | Open the log channel / copy full logs (including environment info) for bug reports |
+| `DSH: Retry Bridge Install` / `DSH: Uninstall Bridge` | Reinstall the bridge / remove it and restore `cordis.patch.yml` |
 
-## 🔗 Bridge integration
+**Add to DSH**
 
-After installation, the extension installs its own bridge package `dsh-vscode-bridge` into DSH's official client-plugin extension point under your DSH user directory, enabling three integrations:
+| Command | Description |
+|---|---|
+| `Add to DSH` | Write a `@path` draft |
+| `Add Selection to DSH (Alt+D)` | Write a `@path:start-end` draft |
 
-- 🔗 **External links**: clicking a link in the panel opens it in your system browser (instead of being trapped inside the iframe);
-- 📂 **File jumps**: clicking a file path in the panel opens the file in VS Code;
-- 📋 **Clipboard copy**: copy buttons inside DSH (such as code-block copy) are routed through the extension host, working around VS Code's clipboard permission block for cross-origin iframes inside webviews.
+**Change visualization and actions**
 
-### Install / uninstall mechanism (transparency disclosure)
+| Command | Description |
+|---|---|
+| `DSH: Show Diff` | Open the before/after diff editor |
+| `DSH: Revert Last Modification` / `DSH: Keep Last Modification` | Act on the most recent change in the current file |
+| `DSH: Revert All Modifications` / `DSH: Keep All Modifications in File` | Act on the whole current file |
+| `DSH: Clear Marks (Keep Changes)` | Clear marks only, files untouched (escape hatch when marks drift) |
 
-To let the DSH page communicate with VS Code, the extension will:
+**Change set (F1–F5)**
 
-1. Install its bridge package `dsh-vscode-bridge` into your DSH user directory (`$DSH_HOME/profiles/web`, default `~/.dsh/profiles/web`) via DSH's official client-plugin extension point;
-2. Write a marked `insert:` entry (wrapped in `# dsh-vscode-bridge: begin` / `# dsh-vscode-bridge: end`) into `cordis.patch.yml`, registering the bridge as a DSH client plugin — writing only to the user directory and never touching the DSH installation directory.
+| Command | Description |
+|---|---|
+| `DSH: Next Change` / `DSH: Previous Change` | Same as <kbd>F8</kbd> / <kbd>Shift</kbd>+<kbd>F8</kbd> |
+| `Open Change` / `Keep Change` / `Discard Change` | Per-change actions (tree or inline buttons) |
+| `Keep All Changes in File` / `Discard All Changes in File` | File-level batch |
+| `Keep All Changes in Session` / `Discard All Changes in Session` | Session-level batch |
+| `Refresh Change List` | Refresh the `DSH Changes` tree |
 
-To remove: run `DSH: Uninstall Bridge` — the extension deletes the marked entry and the bridge directory, restoring the original `cordis.patch.yml` (your own content is untouched).
+**Checkpoints (F9)**
 
-### Bridge-related settings (`dsh.*`)
+| Command | Description |
+|---|---|
+| `Refresh Checkpoints` | Re-read the ledger |
+| `Diff Against This Turn` | Native diff: that turn's snapshot ↔ the current file |
+| `Restore Code To Before This Turn` | Preview → confirm → apply |
 
-| Setting | Default | Description |
-|---|---|---|
-| `dsh.bridge.enabled` | `true` | Enable the bridge (when off: no install, no injection, no warning; the three integrations are unavailable) |
-| `dsh.workspaceRootIndex` | `0` | For multi-root workspaces: which root to use as the `dsh web` process working directory (out-of-range falls back to the first) |
-| `dsh.bridge.silenceWarning` | `false` | Suppress the bridge degradation warning |
+**Selection and Quick Edit (F10/F11)**
 
-### Degradation behavior
+| Command | Description |
+|---|---|
+| `DSH: Quick Edit Selection (Alt+K)` | Input box; Enter sends |
+| `Quick Edit This Selection` | Thread title button: expand the in-editor input box |
+| `Add Selection to DSH` | Thread title button: write a draft without sending |
+| `Send to DSH` | Thread input button: send the instruction to DSH |
 
-The bridge only works inside the panel. If it is inactive (e.g. you open the DSH page in a browser, or the install failed), the panel remains **fully usable** — only the three integrations above are unavailable; a one-time startup warning (with "Retry Install" / "Don't Show Again") is shown.
+## 🔗 Bridge and integration
+
+On installation the extension installs its bridge package into your DSH user directory (through DSH's official client-plugin extension point) so the panel and VS Code can talk both ways:
+
+- 🔗 **External links**: clicking a link inside the panel opens your system browser instead of being trapped in the iframe;
+- 📂 **File jumps**: clicking a file path opens and reveals it in VS Code;
+- 📋 **Clipboard copy**: copy buttons inside DSH write to the system clipboard through the extension host, bypassing VS Code's cross-origin iframe clipboard restriction;
+- 🔄 **Bidirectional messages (interaction enhancements)**: replay/attribution of applied diffs, session state (running / turn / pending count), approval requests and question requests travel **upstream**; approval decisions, question answers, Quick Edit instructions and checkpoint restore calls travel **downstream**.
+
+After a successful handshake the log prints the capability list:
+
+```
+[bridge] handshake ok capabilities=[openFile,diffApplied,injectComposer,quickEdit,approval,question,changes,checkpoint,sessionState]
+```
+
+### Install / uninstall mechanics (full disclosure)
+
+1. Installs the bridge package `dsh-vscode-bridge` into your DSH user directory (`$DSH_HOME/profiles/web`, i.e. `~/.dsh/profiles/web` by default); the extension ships the matching version and reinstalls it when the version differs;
+2. Writes an `insert:` entry marked with `# dsh-vscode-bridge: begin` / `# dsh-vscode-bridge: end` into `cordis.patch.yml`, registering the bridge as an official DSH client plugin (**user directory only — the DSH installation directory is never touched**).
+
+To remove it, run `DSH: Uninstall Bridge`: the marked entry is deleted precisely, the bridge directory is removed, and `cordis.patch.yml` is restored byte-for-byte (your own content is unaffected).
+
+### Degraded mode
+
+The bridge only works inside the panel. If it is unavailable (e.g. you opened the DSH page in a standalone browser, or installation failed) the **panel remains fully usable** — only the integrations above are missing, and a one-time warning offers "Retry install" or "Don't show again". Interaction features (approvals, questions, checkpoints, Quick Edit, change replay) depend on the bridge and quietly stay absent without it.
 
 ## ⚙️ Settings (`dsh.*`)
 
+> Every switch is **on by default** and applies **instantly** — no window reload.
+
+### Feature master switches (v1.2 interaction enhancements)
+
+| Setting | Default | When turned off |
+|---|---|---|
+| `dsh.changes.enabled` | `true` | Stops recording edits (not even reading files), removes three-color highlights and inline buttons, empties the `DSH Changes` tree, hands <kbd>F8</kbd> back to VS Code; **also clears existing marks and the ledger** (the only switch that drops history — the setting description says so) |
+| `dsh.checkpoints.enabled` | `true` | Never reads `~/.dsh/change-ledger` (no I/O), the checkpoints view is empty, restore commands only notify instead of calling out |
+| `dsh.ideInteraction.enabled` | `true` | No approval modal, question picker or completion notification in the IDE; no selection toolbar or in-editor input box; approvals and questions are **left to the DSH panel** |
+| `dsh.quickEdit.enabled` | `true` | <kbd>Alt</kbd>+<kbd>K</kbd>, the context-menu item and thread sending all report that the feature is off and **never send anything** |
+| `dsh.statusbar.agent.enabled` | `true` | Hides only the agent status item (service state and notifications unaffected) |
+
+### Fine-grained switches and behaviour
+
 | Setting | Default | Description |
 |---|---|---|
-| `dsh.port` | `3080` | Desired port (used for both detection and startup) |
+| `dsh.selection.lens.enabled` | `true` | The toolbar buttons above the first selected line (context menu and shortcuts still work when off) |
+| `dsh.selection.threads.enabled` | `true` | In-editor comment thread input box (with it off, Quick Edit falls back to the Alt+K input box) |
+| `dsh.quickEdit.confirmBeforeSend` | `true` | Confirm before Quick Edit sends (it spends a real model turn); choosing "send and don't ask again" flips this to `false` |
+| `dsh.notify.onTurnComplete` | `true` | Turn-complete notification (only when the turn really changed files) |
+| `dsh.interaction.onlyWhenPanelHidden` | `true` | Leave approvals/questions to the panel while it is visible instead of asking again in the IDE |
+
+### Service and bridge
+
+| Setting | Default | Description |
+|---|---|---|
+| `dsh.port` | `3080` | Expected port (used for both probing and startup) |
 | `dsh.host` | `127.0.0.1` | Service address (loopback only) |
-| `dsh.autoStart` | `true` | Auto-start the service when it is not running |
+| `dsh.autoStart` | `true` | Start the service automatically when it is not running |
 | `dsh.stopOnExit` | `true` | Stop the extension-started service when the last window closes |
-| `dsh.extraArgs` | `[]` | Extra arguments appended when starting `dsh web` |
-| `dsh.executablePath` | `""` | Absolute path to the `dsh` executable (`dsh.cmd` on Windows); empty = look up on PATH |
+| `dsh.extraArgs` | `[]` | Extra arguments when starting `dsh web` |
+| `dsh.executablePath` | `""` | Absolute path to the `dsh` executable (`dsh.cmd` on Windows); empty = look up on `PATH` |
+| `dsh.workspaceRootIndex` | `0` | Which workspace root to use as the `dsh web` working directory |
+| `dsh.bridge.enabled` | `true` | Enable the bridge (with it off, none of the integrations above work) |
+| `dsh.bridge.silenceWarning` | `false` | Suppress bridge degradation warnings |
 
 ## 🌍 Localization
 
-UI copy follows the VS Code display language (`Configure Display Language`): `zh-*` → Simplified Chinese, anything else → English.
+UI strings follow the VS Code display language (`Configure Display Language`): `zh-*` → Simplified Chinese, everything else → English. Setting descriptions are bilingual too (`package.nls.json` / `package.nls.zh-cn.json`).
 
 ## 🧑‍💻 Development
 
@@ -125,44 +288,53 @@ Requirements: Node.js ≥ 22, VS Code ≥ 1.91.
 
 ```bash
 npm install
-npm run test          # 132 unit/integration tests (including a full real dsh web flow)
-npm run compile       # builds out/extension.js
+npm run test          # 400 unit/integration tests (including a real dsh web round trip)
+npm run compile       # build out/extension.js
 npm run watch         # watch build
 npm run typecheck     # type check
-npm run package       # package .vsix
+npm run package       # package the .vsix
 ```
 
 Debugging: open this folder in VS Code and press `F5` to launch the Extension Development Host.
 
 ```
 src/
-├── extension.ts          # entry: assembly and command registration
-├── i18n.ts               # runtime copy dictionary (zh-* Chinese / otherwise English)
-├── config.ts             # settings normalization (loopback whitelist)
-├── service/
-│   ├── detect.ts         # port probing (DSH marker detection)
-│   ├── process.ts        # cross-platform subprocess wrapper (dsh / dsh.cmd)
-│   └── manager.ts        # service manager state machine (core)
-├── bridge/               # bridge: installer, handshake host, message handling, status
-├── panel/
-│   ├── html.ts           # panel page templates (minimal CSP)
-│   └── provider.ts       # WebviewViewProvider (iframe + placeholder pages)
-├── workspaceRoot.ts      # multi-root workspace resolution
-└── statusbar.ts          # status bar controller
+├── extension.ts           # entry: wiring, command registration, settings dispatch
+├── config.ts              # settings read + normalization (including feature switches)
+├── i18n.ts                # dynamic string dictionary (zh-* vs English)
+├── statusbar.ts           # service status item + agent status item (F7)
+├── bridge/                # bridge installer, handshake host, message handling, diff executor
+│   ├── diff-service.ts    # three-color highlights / revert / hover / diff view
+│   ├── diff-tracker.ts    # locating and revert-edit construction (pure logic)
+│   ├── change-book.ts     # F1 change ledger (persistence + stale detection)
+│   ├── approval-router.ts # F6 approval gate (safety boundaries)
+│   ├── question-router.ts # F8 questions / plan review
+│   └── agent-state.ts     # F7 state machine
+├── changes/               # F2 navigation / F3 tree / F4 batch / F5 CodeLens
+├── checkpoints/           # F9 ledger reading, blob diff, restore orchestration
+├── selection/             # F10 toolbar and thread / F11 Quick Edit
+├── service/               # port probing, child process wrapper, service manager
+└── panel/                 # webview view provider and placeholder page template
 ```
 
 ## 🧭 Known limitations
 
-- The colored icon on the "Get Started with DSH" walkthrough card comes from Marketplace gallery data and only appears after the extension is published (the card itself works regardless);
-- VS Code platform rule: the left icon opens the left panel, the right icon opens the right panel — the left icon cannot open the right panel.
+- **Checkpoints require a regular git worktree** (engine limitation): non-git folders, sparse checkouts and submodules produce no checkpoints;
+- **Restore depends on the DSH-side plugin**: without `@jillson1/dsh-file-jump` the checkpoints view still lists history, but "restore" reports that it is unavailable;
+- **No sound notification**: the VS Code extension API has no audio capability, so there is deliberately no "play a sound when done" setting (better to omit it than ship a dead switch);
+- **The selection input box width is not controllable**: comment threads are native VS Code widgets; this extension's compromise is "collapsed by default + a compact summary body";
+- **Turning off the change set clears history**: `dsh.changes.enabled` clears the ledger together with the marks (to keep state consistent), and re-enabling does not restore history;
+- The colourful icon on the walkthrough card comes from Marketplace gallery data and only appears once listed there;
+- VS Code platform rule: the left icon opens the left panel and the right icon the right one; they cannot be crossed.
 
 ## 🌐 Community
 
-This is a DeepSeek Harness community plugin (topic: [`dsh-plugin`](https://github.com/topics/dsh-plugin)).
+This project is a DeepSeek Harness community plugin (topic: [`dsh-plugin`](https://github.com/topics/dsh-plugin)).
 
-- DSH official repo: <https://github.com/deepseek-ai/deepseek-harness>
-- Issue tracker: <https://github.com/Jillson1/dsh-for-vscode/issues>
-- DSH community discussions: <https://github.com/deepseek-ai/deepseek-harness/discussions>
+- DSH repository: <https://github.com/deepseek-ai/deepseek-harness>
+- Companion DSH plugin: <https://github.com/Jillson1/dsh-file-jump>
+- Issues: <https://github.com/Jillson1/dsh-for-vscode/issues>
+- DSH discussions: <https://github.com/deepseek-ai/deepseek-harness/discussions>
 
 ## 📄 License
 

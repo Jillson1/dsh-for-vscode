@@ -1,7 +1,7 @@
 {
   "name": "dsh-for-vscode",
   "displayName": "DSH for VS Code",
-  "description": "在 VS Code 侧边栏中使用 DeepSeek Harness（DSH）网页界面，支持文件路径一键跳转到 VS Code 编辑区（含修改行精确定位），右键文件/选区即可添加到 DSH 输入框",
+  "description": "把 DeepSeek Harness（DSH）用成 IDE 级 AI 编程：侧边栏内嵌 DSH 面板，文件路径一键跳转并精确定位修改行；AI 改动三色高亮 + 变更账本（跨 Reload 不失忆）/ 变更树 / 批量保留丢弃 / 行内按钮 / 变更导航；审批与提问直接在编辑区应答、检查点跨轮次恢复、选区一键 Quick Edit——每个功能都能在设置里单独开关",
   "version": "0.3.1",
   "publisher": "Jillson1",
   "icon": "assets/icon.png",
@@ -603,7 +603,14 @@
     "dsh",
     "deepseek-harness",
     "ai",
-    "assistant"
+    "assistant",
+    "ai-coding",
+    "code-review",
+    "diff",
+    "change-tracking",
+    "checkpoint",
+    "inline-edit",
+    "agent"
   ],
   "repository": {
     "type": "git",
