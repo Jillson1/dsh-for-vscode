@@ -452,47 +452,17 @@ export function decorationTargetLine(content: string, newText: string): number |
 }
 
 /**
- * 把落在**空行**上的标记吸附到同一 hunk 内最近的有内容行（向上找）。
- *
- * 为什么需要（真机缺陷）：删除发生在文件末尾时，被删行在文档里没有实体，投影规则把它落到
- * hunk 末尾——而那里往往是结尾的空白行。VS Code 对**空行的背景装饰几乎不可见**，
- * 用户看到的现象就是"这次删除完全没有高亮"（实测：记录的 newText 是 `"\n## 标题\n\n"`，
- * 唯一一条 del 标记落在第 16 行的空行上，而 `⇠ 原:` 提示却在第 13 行，两者还错开 3 行）。
- *
- * 吸附规则：
- * - 非空行不动；
- * - 空行则从上一行起向上找，**不越过 hunk 起始行**（`floorLine`），避免标到无关内容上；
- * - hunk 内全为空行时保持原样（总比乱标好）。
- *
- * @param content  将要高亮的那个文档的内存文本
- * @param marks    行级标记（1-based）
- * @param floorLine 吸附下界（hunk 起始行，1-based）
- */
-export function snapMarksToContent(
-  content: string,
-  marks: readonly HighlightLine[],
-  floorLine: number,
-): HighlightLine[] {
-  if (typeof content !== 'string' || content === '' || marks.length === 0) return [...marks];
-  const lines = content.split('\n');
-  const blank = (ln: number): boolean => (lines[ln - 1] ?? '').trim() === '';
-  const floor = Math.max(1, Math.floor(floorLine));
-  return marks.map((m) => {
-    if (!blank(m.line)) return m;
-    for (let ln = m.line - 1; ln >= floor; ln--) {
-      if (!blank(ln)) return { ...m, line: ln };
-    }
-    return m;
-  });
-}
-
-/**
  * 一条记录在给定文档上**实际占据的行**（装饰绘制与 hover 命中判定的唯一口径）。
  *
  * 为什么必须共用：这两处曾经各写一份判定，装饰改成"吸附空行"之后 hover 仍在用未吸附的
  * `redGreenLines` 结果判命中 → 红色画在第 21 行、hover 却去第 22 行找记录，
  * 表现为**红色可见但悬停不出面板**（真机现象）。不变式由代码结构保证，而不是靠两处手工对齐：
  * **编辑区上画了什么，hover 就必须能查到什么。**
+ *
+ * 注意：这里**不做空行吸附**。删除标记落在空行上曾经不可见（当时用整行红底填充，空行几乎
+ * 看不出颜色），于是加过一层"吸附到最近有内容行"的补丁。2026-09-17 真机验收后删除改为在接缝
+ * 画**边线**（线在空行上照样可见），吸附失去理由，且会把标记推离真实接缝——实测：原始投影第 15 行
+ * 正是接缝位置，吸附后被挪到第 13 行，反而凭空错位两行。故弃用吸附。
  *
  * @param content 将要高亮的那个文档的内存文本
  * @param rec     记录（只需 oldText / newText）
@@ -504,11 +474,7 @@ export function recordMarks(
 ): HighlightLine[] {
   const startLine = decorationTargetLine(content, rec.newText);
   if (startLine === null) return [];
-  return snapMarksToContent(
-    content,
-    mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine)),
-    startLine,
-  );
+  return mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine));
 }
 
 /**

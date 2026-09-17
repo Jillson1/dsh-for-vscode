@@ -24,7 +24,6 @@ import {
   writtenContentMatches,
   userAppendedPart,
   decorationTargetLine,
-  snapMarksToContent,
   recordMarks,
   type AppliedDiffInput,
   type ModificationRecord,
@@ -430,71 +429,32 @@ test('decorationTargetLine 入参非字符串 → null（防御）', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// snapMarksToContent：删除标记落在空行上 → 吸附到 hunk 内有内容的行
-// 真机缺陷：删除文件末尾的段落时，del 投影锚点落在结尾空行，而 VS Code 对空行的
-// 背景装饰几乎不可见 → 用户看到"这次删除完全没有高亮"。
-// ─────────────────────────────────────────────────────────────────────────────
-
-test('snapMarksToContent 非空行的标记原样保留', () => {
-  const marks = [{ line: 2, kind: 'del' as const }];
-  assert.deepEqual(snapMarksToContent('a\nb\nc\n', marks, 1), marks);
-});
-
-test('snapMarksToContent 空行标记向上吸附到最近的有内容行（真机用例）', () => {
-  // 真机：newText="\n## 关键判别标准\n\n" → del 锚点落在结尾空行，应吸附到标题行
-  const content = 'l1\nl2\n\n## 关键判别标准\n\n\n\n';
-  const out = snapMarksToContent(content, [{ line: 7, kind: 'del' as const }], 3);
-  assert.equal(out.length, 1);
-  assert.equal(content.split('\n')[out[0]!.line - 1], '## 关键判别标准');
-  assert.equal(out[0]!.kind, 'del');
-});
-
-test('snapMarksToContent 不越过 hunk 下界（floorLine）', () => {
-  // floor=3：第 3、4 行都是空行 → 不得吸到第 1 行（越出 hunk），保持原样
-  const out = snapMarksToContent('x\n\n\n\n', [{ line: 4, kind: 'del' as const }], 3);
-  assert.equal(out[0]!.line, 4);
-});
-
-test('snapMarksToContent hunk 内全空行 → 保持原样（不乱标）', () => {
-  const out = snapMarksToContent('x\n\n\n', [{ line: 3, kind: 'del' as const }], 2);
-  assert.equal(out[0]!.line, 3);
-});
-
-test('snapMarksToContent 空内容 / 空标记数组 → 安全返回', () => {
-  assert.deepEqual(snapMarksToContent('', [{ line: 1, kind: 'del' }], 1), [{ line: 1, kind: 'del' }]);
-  assert.deepEqual(snapMarksToContent('a\n', [], 1), []);
-});
-
-test('snapMarksToContent CRLF 文档里的空行也认得出来', () => {
-  const content = 'a\r\n\r\n标题\r\n';
-  const out = snapMarksToContent(content, [{ line: 2, kind: 'del' as const }], 1);
-  assert.equal(out[0]!.line, 1); // 第 2 行是空行 → 吸到第 1 行
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 // recordMarks：装饰绘制与 hover 命中判定的**唯一口径**
-// 真机缺陷：装饰改成吸附空行后，hover 仍在用未吸附的结果判命中 →
-// 红色画在第 21 行、hover 却去第 22 行找记录 → "红色可见但悬停无面板"。
+// 真机缺陷：装饰与 hover 各写一份判定 → 红色画在第 21 行、hover 却去第 22 行找记录
+// → "红色可见但悬停无面板"。不变式改由同一个函数保证。
+// （曾有 snapMarksToContent 把空行标记吸附到有内容行；删除改为"接缝边线"后，边线在空行上
+//   照样可见，吸附失去理由且会把标记推离真实接缝，已弃用。）
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('recordMarks 删除在末尾：返回吸附后的可见行（而非结尾空行）', () => {
+test('recordMarks 不做空行吸附：删除标记就落在投影位置（即接缝）', () => {
   // 真机 hunk：newText = "\n## 注意\n"（含 2 行被删内容）
   const content = 'l1\nl2\n\n## 注意\n\n';
   const rec = { oldText: '\n## 注意\n\n本条说明。\n只想清掉标记。', newText: '\n## 注意\n' };
   const marks = recordMarks(content, rec);
-  assert.equal(marks.length, 1);
-  assert.equal(marks[0]!.kind, 'del');
-  assert.equal(content.split('\n')[marks[0]!.line - 1], '## 注意'); // 必须是可见行，不能是空行
+  const start = decorationTargetLine(content, rec.newText)!;
+  assert.ok(marks.length >= 1);
+  assert.ok(marks.every((m) => m.kind === 'del'));
+  assert.deepEqual(marks, mergeLineMarks(redGreenLines(rec.oldText, rec.newText, start)));
 });
 
-test('recordMarks 与 hover 命中判定同源：hover 用同一函数就能命中红行', () => {
+test('recordMarks 与 hover 命中判定同源：hover 用同一函数就能命中删除行', () => {
   const content = 'l1\nl2\n\n## 注意\n\n';
   const rec = { oldText: '\n## 注意\n\n本条说明。\n只想清掉标记。', newText: '\n## 注意\n' };
-  const redLine = recordMarks(content, rec)[0]!.line;
+  const delLine = recordMarks(content, rec)[0]!.line;
   // hover 的命中判定就是 recordMarks(...).some(m => m.line === 光标行)
   const hoverHit = (lineNo: number): boolean => recordMarks(content, rec).some((m) => m.line === lineNo);
-  assert.equal(hoverHit(redLine), true, '红色所在行必须能 hover 出面板');
-  assert.equal(hoverHit(content.split('\n').length), false); // 结尾空行不该命中（修复前的错位点）
+  assert.equal(hoverHit(delLine), true, '删除标记所在行必须能 hover 出面板');
+  assert.equal(hoverHit(1), false, '远离标记的行不该命中');
 });
 
 test('recordMarks newText 定位不到 → 空数组（不画也不 hover）', () => {
