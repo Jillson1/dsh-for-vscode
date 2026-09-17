@@ -298,11 +298,14 @@ export class DiffService {
    * VS Code 的 decoration 无法凭空插入"幽灵行"，这是"看得到红的那份内容"的最接近实现。
    */
   private addDeletedHint(handle: PathHandle, editor: vscode.TextEditor, line1Based: number, deleted: string[]): void {
-    const text = deleted.join(' ⏎ ').replace(/s+/g, ' ').trim();
+    // 注意用 /\s+/：原写法 /s+/ 会把文本里连续的字母 s 换成空格（"lines"→"line "），属笔误。
+    const text = deleted.join(' ⏎ ').replace(/\s+/g, ' ').trim();
     if (text === '') return;
     const clipped = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    // 删多行时把行数写进提示：只标 1 行时用户会怀疑"我删了 3 行怎么只标 1 行"
+    const count = deleted.length > 1 ? `(${deleted.length} 行) ` : '';
     const type = this.deps.window.createTextEditorDecorationType({
-      after: { contentText: `  ⇠ 原: ${clipped}`, color: 'rgba(229, 57, 53, 0.9)', fontStyle: 'italic' },
+      after: { contentText: `  ⇠ 原: ${count}${clipped}`, color: 'rgba(229, 57, 53, 0.9)', fontStyle: 'italic' },
     });
     const line = Math.min(editor.document.lineCount, Math.max(1, line1Based));
     handle.hints.push({ type, ranges: [editor.document.lineAt(line - 1).range] });
@@ -405,6 +408,7 @@ export class DiffService {
     const content = editor.document.getText();
     let drawn = 0;
     const skipped: string[] = [];
+    const placements: string[] = [];
     for (const rec of recs) {
       // 定位落到哪一行由 decorationTargetLine 统一裁决（与 hover 的命中判定同一条规则）：
       // 定位不到（newText 已被改写/被后续改动取代）→ **跳过，不回退占位行号**。
@@ -422,16 +426,24 @@ export class DiffService {
       // 在 VS Code 里几乎不可见（真机现象："这次删除完全没有高亮"）。
       const marks = recordMarks(content, rec);
       for (const mark of marks) this.pushLineMark(handle, editor, mark);
-      // 行尾「⇠ 原:」提示贴在与删除标记**同一行**：此前用 startLine，出现"红色在一行、
-      // 提示却挂在另一行"的错位（真机现象）。
+      const deleted = deletedLines(rec.oldText, rec.newText);
+      // 行尾提示贴在与删除标记**同一行**：此前用 startLine，出现"红色在一行、提示却挂在另一行"。
       const delMark = marks.find((m) => m.kind !== 'add');
       if (delMark !== undefined) {
-        this.addDeletedHint(handle, editor, delMark.line, deletedLines(rec.oldText, rec.newText));
+        this.addDeletedHint(handle, editor, delMark.line, deleted);
       }
+      // 把**实际落点**写进日志：装饰画在第几行、提示挂第几行、删了几行。
+      // 真机验收时"用户看到的行号与我算的行号"对不上，靠这行就能立刻分辨是定位错位还是观感问题。
+      placements.push(
+        `${rec.callId.slice(-6)}{${marks.map((m) => `${m.kind}@${m.line}`).join(',')}}` +
+          `删${deleted.length}行` +
+          (delMark === undefined ? '' : `提示@${delMark.line}`),
+      );
     }
     this.applyAllDecorations(handle, editor);
     this.deps.log?.(
       `refreshFile: path=${path} 记录 ${recs.length} 条 → 高亮 ${drawn} 条` +
+        (placements.length === 0 ? '' : `；落点=[${placements.join(' ')}]`) +
         (skipped.length === 0
           ? ''
           : `；跳过 ${skipped.length} 条=[${skipped.join(', ')}]（newText 已不在文档中，不误标）`),
