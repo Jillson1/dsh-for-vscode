@@ -15,6 +15,8 @@ test('合法配置原样通过', () => {
     notifyOnTurnComplete: true,
     // F10/F11：选区线程默认开、Quick Edit 发送前默认确认
     selectionThreadsEnabled: true,
+    // F10：选区工具条（CodeLens 版）默认开
+    selectionLensEnabled: true,
     quickEditConfirmBeforeSend: true,
     // F6/F8 策略 B：面板可见时审批/提问交回面板
     interactionOnlyWhenPanelHidden: true,

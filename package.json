@@ -307,34 +307,34 @@
       }
     ],
     "keybindings": [
-    {
-      "command": "dsh.addSelectionToDsh",
-      "key": "alt+d",
-      "when": "editorTextFocus && editorHasSelection"
-    },
-    {
-      "command": "dsh.quickEdit.selection",
-      "key": "alt+k",
-      "when": "editorTextFocus && editorHasSelection"
-    },
-    {
-      "command": "dsh.change.next",
-      "key": "f8",
-      "when": "editorTextFocus && dsh.hasFileChanges"
-    },
-    {
-      "command": "dsh.change.prev",
-      "key": "shift+f8",
-      "when": "editorTextFocus && dsh.hasFileChanges"
-    }
-  ],
-  "viewsWelcome": [
-    {
-      "view": "dsh.checkpoints",
-      "contents": "%dsh.welcome.checkpoints%"
-    }
-  ],
-  "menus": {
+      {
+        "command": "dsh.addSelectionToDsh",
+        "key": "alt+d",
+        "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "dsh.quickEdit.selection",
+        "key": "alt+k",
+        "when": "editorTextFocus && editorHasSelection"
+      },
+      {
+        "command": "dsh.change.next",
+        "key": "f8",
+        "when": "editorTextFocus && dsh.hasFileChanges"
+      },
+      {
+        "command": "dsh.change.prev",
+        "key": "shift+f8",
+        "when": "editorTextFocus && dsh.hasFileChanges"
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "dsh.checkpoints",
+        "contents": "%dsh.welcome.checkpoints%"
+      }
+    ],
+    "menus": {
       "explorer/context": [
         {
           "command": "dsh.addFileToDsh",
@@ -550,6 +550,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "%dsh.config.interactionOnlyWhenPanelHidden%"
+        },
+        "dsh.selection.lens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%dsh.config.selectionLensEnabled%"
         }
       }
     }

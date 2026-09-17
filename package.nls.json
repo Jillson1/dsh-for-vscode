@@ -56,5 +56,6 @@
   "dsh.cmd.selectionQuickEdit.title": "Quick Edit This Selection",
   "dsh.cmd.selectionAddToDsh.title": "Add Selection to DSH",
   "dsh.cmd.selectionSubmitReply.title": "Send to DSH",
-  "dsh.config.interactionOnlyWhenPanelHidden": "When the DSH panel is visible, leave approvals/questions to the panel instead of popping a VS Code modal/QuickPick (avoids asking the same thing twice). Turn off to always show them in VS Code."
+  "dsh.config.interactionOnlyWhenPanelHidden": "When the DSH panel is visible, leave approvals/questions to the panel instead of popping a VS Code modal/QuickPick (avoids asking the same thing twice). Turn off to always show them in VS Code.",
+  "dsh.config.selectionLensEnabled": "Selection toolbar: show the two clickable buttons (Add to DSH / Quick Edit) as a CodeLens above the first line of the selection."
 }

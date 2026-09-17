@@ -22,6 +22,8 @@ export interface RawDshConfig {
   notifyOnTurnComplete?: boolean;
   /** 选区变化时是否挂 Comments 内联线程（dsh.selection.threads.enabled） */
   selectionThreadsEnabled?: boolean;
+  /** 选区工具条（CodeLens 版）开关（dsh.selection.lens.enabled） */
+  selectionLensEnabled?: boolean;
   /** Quick Edit 发送前是否先确认（dsh.quickEdit.confirmBeforeSend） */
   quickEditConfirmBeforeSend?: boolean;
   /** 面板可见时是否把审批/提问交给面板（dsh.interaction.onlyWhenPanelHidden） */
@@ -47,6 +49,8 @@ export interface DshConfig {
   notifyOnTurnComplete: boolean;
   /** 选区变化时是否挂 Comments 内联线程 */
   selectionThreadsEnabled: boolean;
+  /** 选区工具条（CodeLens 版）开关 */
+  selectionLensEnabled: boolean;
   /** Quick Edit 发送前是否先确认 */
   quickEditConfirmBeforeSend: boolean;
   /** 面板可见时是否把审批/提问交给面板（策略 B，默认开） */
@@ -67,6 +71,8 @@ export const DEFAULTS: DshConfig = {
   notifyOnTurnComplete: true,
   // F10/F11 默认值：线程默认开（可在设置里关掉，避免"选一点就冒东西"）；发送前确认默认开
   selectionThreadsEnabled: true,
+  // F10 工具条（CodeLens 版）默认开：它只框住"选区首行上方"，不抢焦点、不需要悬停
+  selectionLensEnabled: true,
   quickEditConfirmBeforeSend: true,
   // 策略 B：面板可见时审批/提问交回面板处理（避免同一问题问两遍、模态框抢焦点）
   interactionOnlyWhenPanelHidden: true,
@@ -141,6 +147,8 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
     typeof raw.notifyOnTurnComplete === 'boolean' ? raw.notifyOnTurnComplete : DEFAULTS.notifyOnTurnComplete;
   const selectionThreadsEnabled =
     typeof raw.selectionThreadsEnabled === 'boolean' ? raw.selectionThreadsEnabled : DEFAULTS.selectionThreadsEnabled;
+  const selectionLensEnabled =
+    typeof raw.selectionLensEnabled === 'boolean' ? raw.selectionLensEnabled : DEFAULTS.selectionLensEnabled;
   const quickEditConfirmBeforeSend =
     typeof raw.quickEditConfirmBeforeSend === 'boolean'
       ? raw.quickEditConfirmBeforeSend
@@ -153,7 +161,8 @@ export function normalizeConfig(raw: RawDshConfig): { config: DshConfig; errors:
   return {
     config: {
       host, port, autoStart, stopOnExit, extraArgs, bridgeEnabled, workspaceRootIndex,
-      silenceWarning, executablePath, notifyOnTurnComplete, selectionThreadsEnabled, quickEditConfirmBeforeSend,
+      silenceWarning, executablePath, notifyOnTurnComplete, selectionThreadsEnabled, selectionLensEnabled,
+      quickEditConfirmBeforeSend,
       interactionOnlyWhenPanelHidden,
     },
     errors,
@@ -175,6 +184,7 @@ export function readConfig(): { config: DshConfig; errors: string[] } {
     executablePath: ws.get<string>('executablePath'),
     notifyOnTurnComplete: ws.get<boolean>('notify.onTurnComplete'),
     selectionThreadsEnabled: ws.get<boolean>('selection.threads.enabled'),
+    selectionLensEnabled: ws.get<boolean>('selection.lens.enabled'),
     quickEditConfirmBeforeSend: ws.get<boolean>('quickEdit.confirmBeforeSend'),
     interactionOnlyWhenPanelHidden: ws.get<boolean>('interaction.onlyWhenPanelHidden'),
   });

@@ -56,5 +56,6 @@
   "dsh.cmd.selectionQuickEdit.title": "Quick Edit 这段代码",
   "dsh.cmd.selectionAddToDsh.title": "把选区加入 DSH",
   "dsh.cmd.selectionSubmitReply.title": "发送到 DSH",
-  "dsh.config.interactionOnlyWhenPanelHidden": "DSH 面板可见时，把审批 / 提问交给面板处理，不在 VS Code 弹模态框或选择框（避免同一件事问两遍）。关掉则始终在 VS Code 弹。"
+  "dsh.config.interactionOnlyWhenPanelHidden": "DSH 面板可见时，把审批 / 提问交给面板处理，不在 VS Code 弹模态框或选择框（避免同一件事问两遍）。关掉则始终在 VS Code 弹。",
+  "dsh.config.selectionLensEnabled": "选区工具条：划选后在**选区首行上方**常驻显示「添加到 DSH / Quick Edit」两个可点按钮（CodeLens 版）。关掉则只在编辑区右键菜单与快捷键里可用。"
 }

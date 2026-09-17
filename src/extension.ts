@@ -42,6 +42,7 @@ import {
   type BatchTarget,
 } from './changes/batch';
 import { ChangeCodeLensProvider } from './changes/change-code-lens';
+import { SelectionCodeLensProvider } from './selection/selection-code-lens';
 import { CheckpointStore, ledgerRoot, type CheckpointFs } from './checkpoints/checkpoint-store';
 import { CheckpointTreeProvider, type CheckpointTreeNode } from './checkpoints/checkpoint-tree';
 import {
@@ -600,6 +601,24 @@ export function activate(context: vscode.ExtensionContext): void {
     log: (m) => appendLog(`[lens] ${m}`),
   });
 
+  // F10：选区工具条（CodeLens 版）——划选后在选区首行上方常驻两个可点按钮。
+  // 真机反馈：原 comment thread 的按钮由 VS Code 固定渲染在编辑区左侧留白、位置不可控，
+  // 而且实际观感上"只有一个按钮"；改由 CodeLens 承载入口，线程继续负责编辑器内输入框。
+  const selectionLenses = new SelectionCodeLensProvider({
+    activeSelection: () => {
+      const ed = vscode.window.activeTextEditor;
+      if (ed === undefined) return undefined;
+      const sel = ed.selection;
+      return {
+        fsPath: ed.document.uri.fsPath,
+        startLine: sel.start.line,
+        isEmpty: sel.isEmpty,
+      };
+    },
+    enabled: () => readConfig().config.selectionLensEnabled,
+    log: (m) => appendLog(`[lens] ${m}`),
+  });
+
   /**
    * 打开变更所在文件并定位到该处（F3 树点击 / 命令面板）。
    *
@@ -963,9 +982,22 @@ ${sample}${more}`,
   }
 
   // 选区变化：挂线程（防抖）；编辑器切换：清线程（避免线程挂在不相关的文件上）
-  const selectionSubscription = vscode.window.onDidChangeTextEditorSelection(() =>
-    selectionThreads.onSelectionChanged(),
-  );
+  // 同时刷新选区工具条（CodeLens）：选区一变就让 VS Code 重取那两个按钮。
+  // 防抖理由与线程一致：拖选过程中选区事件每秒触发几十次，逐次重算会让按钮行抖动。
+  let lensTimer: ReturnType<typeof setTimeout> | undefined;
+  const refreshSelectionLens = (): void => {
+    if (lensTimer !== undefined) clearTimeout(lensTimer);
+    lensTimer = setTimeout(() => {
+      lensTimer = undefined;
+      selectionLenses.refresh();
+    }, 120);
+  };
+  const selectionSubscription = vscode.window.onDidChangeTextEditorSelection(() => {
+    selectionThreads.onSelectionChanged();
+    refreshSelectionLens();
+  });
+  /** 切换活动编辑器：离散事件，立即重算（旧编辑器的按钮不该留在新文件上） */
+  const activeEditorForLens = vscode.window.onDidChangeActiveTextEditor(() => selectionLenses.refresh());
 
   /** Alt+K / 命令面板：Ask 一次指令再发送（不依赖线程是否可见） */
   async function quickEditFromInput(): Promise<void> {
@@ -1101,6 +1133,10 @@ ${sample}${more}`,
     // F5：CodeLens provider 与其生命周期
     vscode.languages.registerCodeLensProvider({ scheme: 'file' }, changeLenses),
     changeLenses,
+    // F10：选区工具条（CodeLens 版）
+    vscode.languages.registerCodeLensProvider({ scheme: 'file' }, selectionLenses),
+    selectionLenses,
+    activeEditorForLens,
     // —— F10/F11：选区工具条与 Quick Edit ——
     selectionSubscription,
     selectionController,
