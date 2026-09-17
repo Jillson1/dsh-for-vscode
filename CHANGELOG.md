@@ -1,3 +1,14 @@
+## [0.3.2] - 2026-09-17
+
+### 修复
+
+- **Quick Edit 交互统一（真机反馈）**：原先同一功能有**两种弹窗形态**——选区工具条按钮走"评论线程 + 编辑器内输入框"（弹在选区下方），右键菜单与 `Alt+K` 走"编辑器顶部 InputBox"。
+  现在**三条入口共用顶部同一个 InputBox**（`dsh.selection.quickEdit` 直接调用 `quickEditFromInput`）：弹出位置、回车即发、空指令校验、发送前确认**完全一致**。
+  - 为什么不能"两条路做成外观一样"：评论线程输入框是 VS Code 原生 widget，位置固定在选区下方、宽度不由扩展控制，**永远无法**与顶部 InputBox 对齐，因此只能统一到 InputBox。
+  - 随之移除已不可达的死命令 `dsh.selection.submitReply`、菜单贡献点 `comments/commentThread/context` 与对应激活事件、文案键 `dsh.cmd.selectionSubmitReply.title`（中英）——不留"点了没反应"的命令。
+  - 工具条按钮文案改为「用指令改这段代码 / Edit This Selection with an Instruction」，不再暗示"编辑器内输入框"。
+  - 保留选区工具条两个按钮（`🐳 添加到 DSH` / `✨ Quick Edit`）与评论线程的锚点/标题按钮职责。
+
 ## [0.3.1] - 2026-09-17
 
 ### 新增
