@@ -168,10 +168,7 @@
         "command": "dsh.addFileToDsh",
         "title": "%dsh.cmd.addFileToDsh.title%",
         "category": "DSH",
-        "icon": {
-          "light": "assets/whale-title-light.svg",
-          "dark": "assets/whale-title-dark.svg"
-        }
+        "icon": "assets/whale-title.svg"
       },
       {
         "command": "dsh.addSelectionToDsh",
