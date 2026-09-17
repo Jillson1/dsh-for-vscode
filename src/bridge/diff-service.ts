@@ -335,12 +335,20 @@ export class DiffService {
     bucket.ranges.push(range);
   }
 
-  /** 取（或创建）某文件的红/绿 decoration handle：新增行绿底、删除行红底 + overview ruler 标记。 */
+  /**
+   * 取（或创建）某文件的装饰 handle：新增行绿底、删除接缝红线、替换行琥珀底 + overview ruler 标记。
+   *
+   * 三种类型都必须带 `isWholeLine: true`：装饰默认只包住"该行的文本"，而**空行没有文本**，
+   * span 宽度为 0 —— 于是背景色与边框都画不出来。真机现象（2026-09-17）：两处删除，落在
+   * 内容行的那处看得见红线、落在空行的那处完全看不见，用户直接问"为什么一个有一个没有"。
+   * isWholeLine 让装饰铺满整行宽度，空行也能正常显示。
+   */
   private decorationHandle(path: string): PathHandle {
     const existing = this.byPath.get(path);
     if (existing) return existing;
     const add = {
       type: this.deps.window.createTextEditorDecorationType({
+        isWholeLine: true,
         backgroundColor: 'rgba(76, 175, 80, 0.22)',
         overviewRulerColor: 'rgba(76, 175, 80, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
@@ -354,6 +362,7 @@ export class DiffService {
     // 读作"这里少了一段"，不再声称某行被删。删除内容由行尾 `⇠ 原: (N 行) …` 与 hover 全量 diff 承载。
     const del = {
       type: this.deps.window.createTextEditorDecorationType({
+        isWholeLine: true,
         borderWidth: '2px 0 0 0',
         borderStyle: 'solid',
         borderColor: 'rgba(229, 57, 53, 0.85)',
@@ -364,6 +373,7 @@ export class DiffService {
     };
     const mod = {
       type: this.deps.window.createTextEditorDecorationType({
+        isWholeLine: true,
         backgroundColor: 'rgba(255, 193, 7, 0.20)',
         overviewRulerColor: 'rgba(255, 193, 7, 0.7)',
         overviewRulerLane: vscode.OverviewRulerLane.Left,
