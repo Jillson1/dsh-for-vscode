@@ -56,7 +56,7 @@ import {
   SelectionThreadController,
 } from './selection/selection-thread';
 import { sendQuickEdit } from './selection/quick-edit';
-import { selectionThreadsMuted } from './editorReveal';
+import { classifySelectionOrigin, selectionThreadsMuted } from './editorReveal';
 import type { SelectionInfo } from './selection/selection-model';
 import { revealLineInEditor } from './editorReveal';
 
@@ -667,14 +667,18 @@ export function activate(context: vscode.ExtensionContext): void {
   // 真机反馈：原 comment thread 的按钮由 VS Code 固定渲染在编辑区左侧留白、位置不可控，
   // 而且实际观感上"只有一个按钮"；改由 CodeLens 承载入口，线程继续负责编辑器内输入框。
   /**
-   * 最近一次选区变更的**来源**（鼠标 / 键盘 / 命令）。
+   * 最近一次选区是否由**用户发起**（`null` = 尚未判定过）。
    *
-   * 用它把"用户选的"与"我们跳行时设的"分开 —— VS Code 内部映射已核实：
-   * `keyboard → 1`、`mouse → 2`、`api / code.jump / code.navigation → 3(Command)`；
-   * 我们的 `editor.selection = …`（revealLineInEditor）走的正是 `api` → Command。
-   * 因此工具条只在 Mouse/Keyboard 时出现，点卡片路径跳行不会再冒出来。
+   * 为什么不记"最后一次事件的 kind"（真机缺陷 2026-09-18：划选后两个按钮**闪一下就消失**）：
+   * 选区事件流里除了用户的鼠标/键盘事件，还有大量 VS Code 的程序化补发
+   * （渲染 CodeLens、拖选收尾、视图变化都会发 kind=Command，内部映射已核实：
+   * `keyboard→1`、`mouse→2`、`api/code.jump/code.navigation→3`）。
+   * 按"最后一次"记，任何一次补发都会把来源冲掉，120ms 防抖后的重算就把工具条收掉。
+   *
+   * 现在改为"**只在提供新信息的事件上更新**"（判定收敛在 `editorReveal.classifySelectionOrigin`）：
+   * 用户事件 → true；静音窗内的 Command（= 我们自己的跳行定位）→ false；其余 → null **保持原值**。
    */
-  let lastSelectionKind: vscode.TextEditorSelectionChangeKind | undefined;
+  let selectionUserInitiated: boolean | null = null;
 
   const selectionLenses = new SelectionCodeLensProvider({
     activeSelection: () => {
@@ -685,9 +689,8 @@ export function activate(context: vscode.ExtensionContext): void {
         fsPath: ed.document.uri.fsPath,
         startLine: sel.start.line,
         isEmpty: sel.isEmpty,
-        userInitiated:
-          lastSelectionKind === vscode.TextEditorSelectionChangeKind.Mouse ||
-          lastSelectionKind === vscode.TextEditorSelectionChangeKind.Keyboard,
+        // 未判定（null）按"不展示"处理：宁可少一次按钮，也不在被程序化选中的行上堆东西
+        userInitiated: selectionUserInitiated === true,
       };
     },
     enabled: () => ideGate('selectionLens'),
@@ -1083,13 +1086,22 @@ ${sample}${more}`,
     }, 120);
   };
   const selectionSubscription = vscode.window.onDidChangeTextEditorSelection((e) => {
-    // 记录来源：工具条据此区分"用户选的"与"我们跳行设的"（后者不出工具条）
-    lastSelectionKind = e.kind;
+    // 记录来源：工具条据此区分"用户选的"与"我们跳行设的"（后者不出工具条）。
+    // **只在本次事件提供信息时更新**——VS Code 会补发大量 kind=Command 的程序化事件
+    // （渲染 CodeLens、拖选收尾等），若照单全收会把刚记下的"用户选区"冲掉，
+    // 表现为按钮闪一下消失（真机缺陷 2026-09-18）。
+    const origin = classifySelectionOrigin(e.kind, selectionThreadsMuted());
+    if (origin !== null) selectionUserInitiated = origin;
     selectionThreads.onSelectionChanged();
     refreshSelectionLens();
   });
   /** 切换活动编辑器：离散事件，立即重算（旧编辑器的按钮不该留在新文件上） */
-  const activeEditorForLens = vscode.window.onDidChangeActiveTextEditor(() => selectionLenses.refresh());
+  const activeEditorForLens = vscode.window.onDidChangeActiveTextEditor(() => {
+    // 换文件后上一个文件的来源判定不再适用：VS Code 不会为"切过去的已有选区"补发用户事件，
+    // 因此这里显式回到"未判定"，避免把上一个文件的用户选区状态带到新文件上。
+    selectionUserInitiated = null;
+    selectionLenses.refresh();
+  });
 
   /**
    * Quick Edit 的**唯一输入入口**（顶部 InputBox）。

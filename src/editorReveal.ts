@@ -34,6 +34,36 @@ export function selectionThreadsMuted(): boolean {
 }
 
 /**
+ * 判定一个"选区变更"是否应当被视为**用户发起**的。
+ *
+ * 真机缺陷（2026-09-18）：编辑区划选后，「添加到 DSH / Quick Edit」两个按钮**闪一下就消失**。
+ * 根因是来源被记成"最后一次事件是什么"，而选区事件流里除了用户的鼠标/键盘事件，
+ * 还夹杂大量**程序化事件**（kind = Command）：VS Code 在渲染 CodeLens、拖选收尾、
+ * 视图变化时都会补发。任何一次这类事件都会把来源覆盖成"非用户"，
+ * 于是 120ms 防抖后的那次重算直接把按钮收掉 —— 表现就是闪烁。
+ *
+ * 规则（与 `muteSelectionThreads` 同模块：这是"程序化 vs 用户"的唯一判定口，避免两处口径漂移）：
+ *   - Mouse / Keyboard            → 用户发起（不在静音窗内时）→ `true`
+ *   - Command **不在静音窗内**     → VS Code 的良性补发 → `null`（**不提供信息**，调用方保持原值）
+ *   - Command **在静音窗内**       → 我们自己的跳行定位 → `false`（按钮不该冒出来）
+ *   - Undefined / 其它            → 无法判定 → `null`（宁可保留按钮，也不要误收）
+ *
+ * `null` 是这套规则的关键：它表示"这次事件不提供新信息"，调用方**不得**据此覆盖已知来源。
+ *
+ * @param kind             VS Code 给出的选区变更来源（1=Keyboard、2=Mouse、3=Command）
+ * @param inSuppressWindow 调用方提供的"是否处于程序化静音窗"判定
+ * @returns true=用户发起；false=程序化；null=本次事件不提供信息（保持原值）
+ */
+export function classifySelectionOrigin(
+  kind: number | undefined,
+  inSuppressWindow: boolean,
+): boolean | null {
+  if (kind === 1 || kind === 2) return !inSuppressWindow;
+  if (kind === 3) return inSuppressWindow ? false : null;
+  return null;
+}
+
+/**
  * 打开文件并定位到 1-based 行。
  * @param path 文件绝对路径
  * @param line 1-based 行号（越界时归一到文档最后一行）
