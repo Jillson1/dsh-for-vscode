@@ -12,8 +12,9 @@ import {
   buildRevertEdit,
   locateNewText,
   pathsEqual,
-  decorationTargetLine,
   recordMarks,
+  resolveRecordMarks,
+  allowsInPlaceAction,
   diffNature,
   summarizeDiff,
   deletedLines,
@@ -23,6 +24,7 @@ import {
   userAppendedPart,
   type ModificationRecord,
   type HighlightLine,
+  type MatchConfidence,
 } from './diff-tracker';
 import { ChangeBook, contentHash, type ChangeRecord, type ChangeSource, type RevertOutcome } from './change-book';
 
@@ -112,6 +114,16 @@ interface PathHandle {
   add: Bucket;
   del: Bucket;
   mod: Bucket;
+  /**
+   * 低置信命中（`gap` / `near` 档）专用灰调装饰。
+   *
+   * 为什么必须与正常三色分开：分层定位找回来的位置只是"最像"的一段，
+   * 若与"锚点原封不动"同色呈现，用户会以为这里百分之百是当次改动，
+   * 进而对着一个可能错位的位置做判断。灰调 = "这里大概改过"，与确定高亮一眼可分。
+   */
+  dimAdd: Bucket;
+  dimDel: Bucket;
+  dimMod: Bucket;
   hints: Bucket[];
 }
 
@@ -309,6 +321,10 @@ export class DiffService {
     void editor.setDecorations(handle.add.type, handle.add.ranges);
     void editor.setDecorations(handle.del.type, handle.del.ranges);
     void editor.setDecorations(handle.mod.type, handle.mod.ranges);
+    // 低置信（gap / near）三桶：灰调呈现，与上面三桶互斥（同一条记录只进其中一套）
+    void editor.setDecorations(handle.dimAdd.type, handle.dimAdd.ranges);
+    void editor.setDecorations(handle.dimDel.type, handle.dimDel.ranges);
+    void editor.setDecorations(handle.dimMod.type, handle.dimMod.ranges);
     for (const hint of handle.hints) void editor.setDecorations(hint.type, hint.ranges);
   }
 
@@ -342,15 +358,25 @@ export class DiffService {
     handle.hints = [];
   }
 
-  /** 把一条红绿标记（1-based 文件行）追加到对应 decoration 的区间列表。 */
+  /**
+   * 把一条红绿标记（1-based 文件行）追加到对应 decoration 的区间列表。
+   * @param confidence 命中置信度；低置信（gap / near）走灰调桶，与确定高亮区分
+   */
   private pushLineMark(
     handle: PathHandle,
     editor: vscode.TextEditor,
     mark: HighlightLine,
+    confidence: MatchConfidence | null = 'exact',
   ): void {
     const line1Based = Math.min(editor.document.lineCount, Math.max(1, mark.line));
     const range = editor.document.lineAt(line1Based - 1).range;
-    const bucket = mark.kind === 'add' ? handle.add : mark.kind === 'del' ? handle.del : handle.mod;
+    const dim = !allowsInPlaceAction(confidence);
+    const bucket =
+      mark.kind === 'add'
+        ? dim ? handle.dimAdd : handle.add
+        : mark.kind === 'del'
+          ? dim ? handle.dimDel : handle.del
+          : dim ? handle.dimMod : handle.mod;
     bucket.ranges.push(range);
   }
 
@@ -398,7 +424,36 @@ export class DiffService {
       }),
       ranges: [] as vscode.Range[],
     };
-    const handle: PathHandle = { add, del, mod, hints: [] };
+    const handle: PathHandle = {
+      add,
+      del,
+      mod,
+      // 低置信（gap / near）专用：同一个颜色但**透明度大幅降低**，并去掉 overview ruler 标记——
+      // 目的：让用户看出"这里大概改过"，但一眼能分辨它不如正常高亮确定。
+      dimAdd: {
+        type: this.deps.window.createTextEditorDecorationType({
+          isWholeLine: true,
+          backgroundColor: 'rgba(76, 175, 80, 0.08)',
+        }),
+        ranges: [] as vscode.Range[],
+      },
+      dimDel: {
+        type: this.deps.window.createTextEditorDecorationType({
+          isWholeLine: true,
+          overviewRulerColor: 'rgba(229, 57, 53, 0.25)',
+          overviewRulerLane: vscode.OverviewRulerLane.Left,
+        }),
+        ranges: [] as vscode.Range[],
+      },
+      dimMod: {
+        type: this.deps.window.createTextEditorDecorationType({
+          isWholeLine: true,
+          backgroundColor: 'rgba(255, 193, 7, 0.07)',
+        }),
+        ranges: [] as vscode.Range[],
+      },
+      hints: [],
+    };
     this.byPath.set(path, handle);
     return handle;
   }
@@ -439,32 +494,42 @@ export class DiffService {
     handle.add.ranges = [];
     handle.del.ranges = [];
     handle.mod.ranges = [];
+    handle.dimAdd.ranges = [];
+    handle.dimDel.ranges = [];
+    handle.dimMod.ranges = [];
     this.disposeHints(handle);
     const content = editor.document.getText();
     let drawn = 0;
+    let lowConfidence = 0;
     const skipped: string[] = [];
     const placements: string[] = [];
     for (const rec of recs) {
-      // 定位落到哪一行由 decorationTargetLine 统一裁决（与 hover 的命中判定同一条规则）：
-      // 定位不到（newText 已被改写/被后续改动取代）→ **跳过，不回退占位行号**。
+      // 定位落到哪一行由 resolveRecordMarks 统一裁决（与 hover 的命中判定**同一条路径**）：
+      // 五档全失败（连近似都找不到）→ **跳过，不回退占位行号**。
       // 回退会把整片内容误标成新增，而 hover 又查不到该记录（自相矛盾的界面）。
-      const startLine = decorationTargetLine(content, rec.newText);
-      if (startLine === null) {
+      const resolved = resolveRecordMarks(content, rec);
+      if (resolved.marks.length === 0) {
         skipped.push(
           `${rec.callId.slice(-6)}(tool=${rec.tool ?? '-'},old=${rec.oldText.length},new=${rec.newText.length})`,
         );
         continue;
       }
       drawn += 1;
-      // 该记录在本文档上占据哪些行：与 hover 命中判定共用 recordMarks（唯一口径）。
+      // 命中方式是"原样"还是"找回来的"，决定这套标记是正常三色还是灰调（真机分级要求）
+      const dim = !allowsInPlaceAction(resolved.confidence);
+      if (dim) lowConfidence += 1;
+      rec.matchConfidence = resolved.confidence ?? undefined;
+      // 该记录在本文档上占据哪些行：与 hover 命中判定共用 resolveRecordMarks（唯一口径）。
       // 内部会把落在结尾空行上的删除标记吸附到 hunk 内最近的有内容行——空行的背景装饰
       // 在 VS Code 里几乎不可见（真机现象："这次删除完全没有高亮"）。
-      const marks = recordMarks(content, rec);
-      for (const mark of marks) this.pushLineMark(handle, editor, mark);
+      const marks = resolved.marks;
+      for (const mark of marks) this.pushLineMark(handle, editor, mark, resolved.confidence);
       const deleted = deletedLines(rec.oldText, rec.newText);
       // 行尾提示贴在与删除标记**同一行**：此前用 startLine，出现"红色在一行、提示却挂在另一行"。
       const delMark = marks.find((m) => m.kind !== 'add');
-      if (delMark !== undefined) {
+      if (delMark !== undefined && !dim) {
+        // 低置信不注入"⇠ 原:"提示：那句话是**断言**"这里原本是这段内容"，
+        // 而灰调位置只是"最像"的一段——断言放这里就成了误导。
         this.addDeletedHint(handle, editor, delMark.line, deleted);
       }
       // 把**实际落点**写进日志：装饰画在第几行、提示挂第几行、删了几行。
@@ -472,16 +537,18 @@ export class DiffService {
       placements.push(
         `${rec.callId.slice(-6)}{${marks.map((m) => `${m.kind}@${m.line}`).join(',')}}` +
           `删${deleted.length}行` +
-          (delMark === undefined ? '' : `提示@${delMark.line}`),
+          (dim ? `灰(${resolved.confidence} ${resolved.score})` : '') +
+          (delMark === undefined || dim ? '' : `提示@${delMark.line}`),
       );
     }
     this.applyAllDecorations(handle, editor);
     this.deps.log?.(
       `refreshFile: path=${path} 记录 ${recs.length} 条 → 高亮 ${drawn} 条` +
+        (lowConfidence === 0 ? '' : `（其中低置信 ${lowConfidence} 条）`) +
         (placements.length === 0 ? '' : `；落点=[${placements.join(' ')}]`) +
         (skipped.length === 0
           ? ''
-          : `；跳过 ${skipped.length} 条=[${skipped.join(', ')}]（newText 已不在文档中，不误标）`),
+          : `；跳过 ${skipped.length} 条=[${skipped.join(', ')}]（五档定位均未命中）`),
     );
   }
 
@@ -677,6 +744,11 @@ export class DiffService {
             return n === 'modify' ? 2 : n === 'del' ? 1 : 0;
           };
           const hit = hits.reduce((best, cur) => (rankOf(cur) >= rankOf(best) ? cur : best));
+          // 命中方式以**当场重算**为准（记录上的缓存只作兜底）：位置是本行、文档是同一份内存文本，
+          // 两次解析必须给出一致结论（"画了什么，hover 就查到什么"这条不变式靠它保证）。
+          const resolved = resolveRecordMarks(content, hit);
+          const confidence: MatchConfidence | null = resolved.confidence ?? hit.matchConfidence ?? null;
+          const lowConfidence = !allowsInPlaceAction(confidence);
 
           const nature = diffNature(hit.oldText, hit.newText);
           const { added, deleted } = summarizeDiff(hit.oldText, hit.newText);
@@ -695,9 +767,23 @@ export class DiffService {
             md.appendMarkdown(`${preview}\n\n`);
           }
           // 按钮：丢弃（edit → 还原改动；write 新建 → 删除文件）+ 保留 + 查看对比
+          //
+          // **低置信护栏（真机要求）**：位置是 gap / near 档降级找回来的，
+          // "丢弃/保留"都是**破坏性**或**断言性**动作——对着一个"只是最像"的位置执行撤销，
+          // 轻则白操作一次，重则改错地方。因此低置信只给「查看对比」，并在正文里说明原因。
           const arg = encodeURIComponent(JSON.stringify([hit.callId]));
           const plan = planDiscard(hit);
-          if (plan.kind === 'refuse') {
+          if (lowConfidence) {
+            const why =
+              confidence === 'near'
+                ? `位置由近似匹配还原（相似度 ${resolved.score.toFixed(2)}），非原样命中`
+                : confidence === 'ws'
+                  ? '锚点与文档仅有空白/缩进差异，非原样命中'
+                  : '锚点文本的行间被后续改动打断，位置由降级匹配还原';
+            md.appendMarkdown(`[查看对比](command:dsh.diff.show)\n\n`);
+            md.appendMarkdown(`_⚠ 已置灰：${why}。为避免改错位置，此处不提供「丢弃 / 保留」；` +
+              `请用「查看对比」确认后再动手。_`);
+          } else if (plan.kind === 'refuse') {
             // 来源工具未知（旧版桥接未转发 tool）：不提供丢弃按钮，避免文本还原清空文件
             md.appendMarkdown(
               `[$(check) 保留](command:dsh.diff.keep?${arg})　·　[查看对比](command:dsh.diff.show)`,
@@ -855,6 +941,9 @@ export class DiffService {
         handle.add.type.dispose();
         handle.del.type.dispose();
         handle.mod.type.dispose();
+        handle.dimAdd.type.dispose();
+        handle.dimDel.type.dispose();
+        handle.dimMod.type.dispose();
         for (const hint of handle.hints) hint.type.dispose();
       } catch {
         /* 已释放 */

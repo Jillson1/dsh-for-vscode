@@ -28,6 +28,12 @@ export interface ModificationRecord {
   ts: number;
   /** 来源工具（'edit' | 'write'；缺省未知）——决定"丢弃"的语义。 */
   tool?: string;
+  /**
+   * 最近一次在文档上定位时的命中方式（见 `locateTextDetailed`）。
+   * `gap` / `near` 表示位置是**降级找回来的**——UI 据此只置灰提示、不给处置按钮。
+   * 由 diff-service 在 refreshFile 时回填（纯数据字段，测试可直接构造）。
+   */
+  matchConfidence?: MatchConfidence;
 }
 
 /** 一条 applied diff 输入（来自桥接消息，路径可能是相对路径）。 */
@@ -120,21 +126,203 @@ export function recordsFromDiffs(input: AppliedDiffInput, workspaceRoot: string 
 }
 
 /**
+ * 定位置信度（**决定要不要给"丢弃/保留"按钮**，见 diff-service 的 hover）。
+ *
+ * 为什么必须引入它：同一文件被快速连续编辑时（真机实测：单轮 46 次 edit 改同一个文件，
+ * 失败记录距下一次编辑中位数 3.9 秒），早先记录锚点文本的**行与行之间会被插入别的改动**，
+ * 于是 `indexOf(整段)` 必然失败 → 记录成片不被高亮，用户看到"edit/write 失去高亮"。
+ * 分层降级能找回这些位置，但**降级命中 ≠ 文件被改过**——所以要把置信度带出来，
+ * 让 UI 决定"只置灰提示"还是"给处置按钮"。
+ */
+export type MatchConfidence = 'exact' | 'eol' | 'ws' | 'gap' | 'near';
+
+/** 分层定位结果：位置 + 命中方式 + 置信度分数（0..1） */
+export interface DetailedLocation extends LocatedText {
+  readonly confidence: MatchConfidence;
+  readonly score: number;
+}
+
+/** `near` 档的最低相似度：低于它宁可不标（"宁可没有标记，也不要标在错误的位置"）。 */
+export const NEAR_MIN_SCORE = 0.5;
+/** 锚点行数达到这个数才允许 `near` 滑窗兜底：太短的锚点滑到哪都"像"。 */
+export const NEAR_MIN_LINES = 3;
+
+/** 逐行相似度（0..1）：整行相等记 1，仅首尾空白差异记 0.9，否则按公共前缀占比。 */
+function lineSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (a.trim() === b.trim()) return 0.9;
+  const n = Math.min(a.length, b.length, 200);
+  let same = 0;
+  while (same < n && a[same] === b[same]) same += 1;
+  return n === 0 ? 0 : same / Math.max(a.length, b.length);
+}
+
+/** 偏移 → 1-based 行号（与历史实现同一算法，避免口径漂移） */
+function lineOf(content: string, offset: number): number {
+  return content.slice(0, offset).split('\n').length;
+}
+
+/** 行号（0-based）→ 字符偏移 */
+function offsetOfLine(lines: readonly string[], line: number): number {
+  let n = 0;
+  for (let i = 0; i < line; i++) n += (lines[i] as string).length + 1;
+  return n;
+}
+
+/**
+ * 分层定位（**唯一的定位实现**）。
+ *
+ * 五档，按顺序尝试，命中即返回：
+ *   0. `exact` 整段精确 `indexOf` —— 最强；
+ *   1. `eol`   仅换行风格不同（CRLF ↔ LF）—— 与 exact 同级可信；
+ *   2. `ws`    仅**首尾空白/缩进**不同（整行 trim 后相等，所有非空行都对齐）—— 确定但非原样；
+ *   3. `gap`   **允许锚点各行之间夹着别的行**（行序列匹配）。这正是快速连续编辑的失效形态：
+ *              首轮实测失败的 167 条里，**74 条**属于"几乎每行都还在文件里、但不连续"；
+ *   4. `near`  滑窗逐行相似度取最像的一段（要求锚点 ≥3 行、相似度 ≥ 0.5）—— 兜底。
+ *
+ * ⚠️ 只有 0/1 两档算"原样命中"（`allowsInPlaceAction`），2/3/4 档一律按低置信呈现（灰调 + 不给处置按钮）。
+ *
+ * @param content 将要高亮的那个文档的**内存文本**（须与 hover 判定同源，不能用磁盘内容）
+ * @param text    记录的 newText（改后片段）
+ * @returns 命中信息；五档全失败 → null（调用方应**跳过**该记录，不画任何标记）
+ */
+export function locateTextDetailed(content: string, text: string): DetailedLocation | null {
+  if (typeof content !== 'string' || typeof text !== 'string' || text === '') return null;
+
+  const textLines = text.split('\n');
+  const contentLines = content.split('\n');
+  const anchorLines = textLines.filter((l) => l.trim() !== '');
+  /** 纯空白锚点没有任何信息量：只能整段原样找（找到算 exact，找不到就是失败） */
+  if (anchorLines.length === 0) {
+    const i = content.indexOf(text);
+    return i === -1
+      ? null
+      : { line: lineOf(content, i), startOffset: i, matched: text, confidence: 'exact', score: 1 };
+  }
+
+  // —— 第 0 档：整段精确命中（最强，必须最先判）——
+  // 放在最前：`l2\nl3` 这种连续命中若先经过 ws 档，会被误报成"仅空白不同"（低置信）。
+  // ws 档因此只在**整段原样找不到**时才参与（例如缩进被规整过）。
+  const direct = content.indexOf(text);
+  if (direct !== -1) {
+    return { line: lineOf(content, direct), startOffset: direct, matched: text, confidence: 'exact', score: 1 };
+  }
+
+  // —— 第 1 档：仅换行风格不同（CRLF ↔ LF）——
+  if (text.includes('\n')) {
+    const normalized = text.includes('\r\n') ? text.replace(/\r\n/g, '\n') : text.replace(/\n/g, '\r\n');
+    const i2 = content.indexOf(normalized);
+    if (i2 !== -1) {
+      return { line: lineOf(content, i2), startOffset: i2, matched: normalized, confidence: 'eol', score: 1 };
+    }
+  }
+
+  // —— 第 2 档：仅首尾空白不同（缩进整体变化 / 单行锚点缩进被改）——
+  // 用 trim 后的整行相等来定位：要求**所有非空行都在同一位置对齐**，不使用模糊分数，
+  // 所以这一档是"确定"而非"近似"（例如 vsix 打包时缩进被规整）。
+  // 同一行文本在文件里出现多次时取第一处，并用 score 略降一档表达这个不确定性。
+  {
+    let from = 0;
+    let allMatched = true;
+    const hits: number[] = [];
+    for (const line of anchorLines) {
+      const idx = contentLines.findIndex((l, i) => i >= from && l.trim() === line.trim());
+      if (idx === -1) {
+        allMatched = false;
+        break;
+      }
+      hits.push(idx);
+      from = idx + 1;
+    }
+    if (allMatched) {
+      const firstFound = hits[0] as number;
+      const lastFound = hits[hits.length - 1] as number;
+      const span = lastFound - firstFound + 1;
+      // **关键判别**（只对多行锚点）：非空行之间是否被插入了别的内容。
+      //   span 与"锚点行数（含空行）"相当 → 只是空白/缩进不同 → `ws`
+      //   span 明显更大                  → 中间夹了别的行 → 交给 `gap`（语义不同，不能混）
+      // 单行锚点没有"行间"概念，恒按 `ws` 处理。
+      const inserted = anchorLines.length >= 2 && span > textLines.length;
+      if (!inserted) {
+        const occurrences = contentLines.filter((l) => l.trim() === (anchorLines[0] as string).trim()).length;
+        return {
+          line: firstFound + 1,
+          startOffset: offsetOfLine(contentLines, firstFound),
+          matched: text,
+          confidence: 'ws',
+          score: occurrences > 1 || anchorLines.length === 1 ? 0.88 : 0.95,
+        };
+      }
+    }
+  }
+
+  // —— 第 3 档：允许行间插入（行序列匹配，单遍扫描）——
+  // 全部行都按序找到才认：漏一行说明锚点已被实质改写，交给下一档按相似度裁决。
+  // 单行锚点不走这一档：`gap` 对单行的语义就是"文件里随便找一处相同的行"，
+  // 信息量不足、容易落到别人的位置上——那是第 2 档（trim 对齐）与第 4 档（滑窗）该管的事。
+  if (anchorLines.length >= 2) {
+    let searchFrom = 0;
+    let foundAll = true;
+    const foundLines: number[] = [];
+    for (const line of anchorLines) {
+      const idx = contentLines.findIndex((l, i) => i >= searchFrom && l === line);
+      if (idx === -1) {
+        foundAll = false;
+        break;
+      }
+      foundLines.push(idx);
+      searchFrom = idx + 1;
+    }
+    if (foundAll) {
+      const firstFound = foundLines[0] as number;
+      const lastFound = foundLines[foundLines.length - 1] as number;
+      const span = lastFound - firstFound + 1;
+      const density = foundLines.length / span; // 命中行占比：越高说明中间插入越少
+      const score = Math.min(1, 0.9 + 0.1 * density);
+      return {
+        line: firstFound + 1,
+        startOffset: offsetOfLine(contentLines, firstFound),
+        matched: text,
+        confidence: 'gap',
+        score: Number(score.toFixed(3)),
+      };
+    }
+  }
+
+  // —— 第 4 档：滑窗相似度（仅在锚点够长时启用）——
+  if (textLines.length < NEAR_MIN_LINES || anchorLines.length < 2) return null;
+  const win = textLines.length;
+  let bestScore = 0;
+  let bestStart = -1;
+  for (let s = 0; s + win <= contentLines.length; s++) {
+    let total = 0;
+    for (let k = 0; k < win; k++) total += lineSimilarity(contentLines[s + k] as string, textLines[k] as string);
+    const score = total / win;
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = s;
+    }
+  }
+  if (bestStart === -1 || bestScore < NEAR_MIN_SCORE) return null;
+  return {
+    line: bestStart + 1,
+    startOffset: offsetOfLine(contentLines, bestStart),
+    matched: text,
+    confidence: 'near',
+    score: Number(bestScore.toFixed(3)),
+  };
+}
+
+/**
  * 容错定位：在 content 中找 text 的 1-based 起始行与 0-based 字符偏移；找不到返回 null。
- * 兼容 CRLF/LF 换行差异：DSH 侧片段（LF）与磁盘文件（CRLF）换行风格可能不同，
- * 直接 indexOf 会失败——先原样找，失败则把 text 换行归一为 content 风格再找。
+ *
+ * ⚠️ 升级说明（2026-09-18）：本函数现在也会返回 `gap` / `near` 档结果——
+ * **"能定位"不再等于"锚点原封不动还在"**。需要区分强度的调用方
+ * （决定给不给"丢弃"按钮的 hover）必须改用 `locateTextDetailed` 读 confidence。
  */
 function locateFlexible(content: string, text: string): LocatedText | null {
-  if (typeof content !== 'string' || typeof text !== 'string' || text === '') return null;
-  let idx = content.indexOf(text);
-  let matched = text;
-  if (idx === -1 && text.includes('\n')) {
-    const normalized = text.includes('\r\n') ? text.replace(/\r\n/g, '\n') : text.replace(/\n/g, '\r\n');
-    idx = content.indexOf(normalized);
-    matched = normalized;
-  }
-  if (idx === -1) return null;
-  return { line: content.slice(0, idx).split('\n').length, startOffset: idx, matched };
+  const r = locateTextDetailed(content, text);
+  return r === null ? null : { line: r.line, startOffset: r.startOffset, matched: r.matched };
 }
 
 /** 定位结果：1-based 行号 + 0-based 偏移 + **文件中的实际片段**（换行风格可能与入参不同）。 */
@@ -472,9 +660,46 @@ export function recordMarks(
   content: string,
   rec: { oldText: string; newText: string },
 ): HighlightLine[] {
-  const startLine = decorationTargetLine(content, rec.newText);
-  if (startLine === null) return [];
-  return mergeLineMarks(redGreenLines(rec.oldText, rec.newText, startLine));
+  return resolveRecordMarks(content, rec).marks;
+}
+
+/** 带置信度的 marks 结果：`marks` 为空 = 五档全失败（跳过该记录，不画也不参与 hover） */
+export interface RecordMarksResult {
+  readonly marks: HighlightLine[];
+  readonly confidence: MatchConfidence | null;
+  readonly score: number;
+}
+
+/**
+ * `recordMarks` 的**带置信度版本**（UI 分级用）。
+ *
+ * 为什么要单独暴露置信度：分层定位（gap / near）能找回被"行间插入"打断的锚点，
+ * 但这类命中**不能当作"锚点原封不动"**——真机上必须表现为"置灰提示 + 不给丢弃按钮"，
+ * 否则用户可能对着一段只是"看起来像"的位置执行撤销。判定与绘制仍共用同一条路径
+ * （本函数），保证"画了什么，hover 就能查到什么"这条不变式不被破坏。
+ */
+export function resolveRecordMarks(
+  content: string,
+  rec: { oldText: string; newText: string },
+): RecordMarksResult {
+  const loc = locateTextDetailed(content, rec.newText);
+  if (loc === null) return { marks: [], confidence: null, score: 0 };
+  return {
+    marks: mergeLineMarks(redGreenLines(rec.oldText, rec.newText, loc.line)),
+    confidence: loc.confidence,
+    score: loc.score,
+  };
+}
+
+/**
+ * 该置信度是否允许"就地处置"（丢弃 / 保留）。
+ *
+ * 只有**原样命中**的两档（exact / eol）允许：`ws`（空白不同）、`gap`（行间有插入）、
+ * `near`（滑窗近似）三档找回来的位置都不能作为破坏性动作的落点——
+ * "丢弃"要按锚点改文件，"保留"要断言"这里就是那次改动"，两者都不允许"大概"。
+ */
+export function allowsInPlaceAction(confidence: MatchConfidence | null): boolean {
+  return confidence === 'exact' || confidence === 'eol';
 }
 
 /**
