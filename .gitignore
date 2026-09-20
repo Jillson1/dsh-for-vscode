@@ -6,6 +6,10 @@ out/
 # git worktree 工作区（本计划隔离开发用）
 .worktrees/
 
+# 本地鉴权复现器与 e2e 隔离 DSH_HOME（仅本机验证 DSH ≥0.1.2 鉴权用，不入库）
+.dsh-auth-mock/
+.dsh-e2e-home/
+
 # 敏感文件（防误提交密钥/凭据）
 .env
 .env.*
