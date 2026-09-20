@@ -1,6 +1,7 @@
 // src/service/manager.ts — 服务管理器：状态机编排探测/启动/等待/停止
 // 纯模块：不依赖 vscode；探测与进程管理均通过依赖注入，便于单测。
 import { findFreePort, PORT_FALLBACK_ATTEMPTS, type ProbeResult } from './detect';
+import { parseLaunchUrlLine, pickLaunchUrl } from './launchUrl';
 import type { ChildProcessLike, ProcessRunner } from './process';
 import type { MsgKey } from '../i18n';
 
@@ -48,6 +49,12 @@ export interface ManagerDeps {
   healthIntervalMs?: number;
   /** 启动总超时（毫秒，默认 15000） */
   startTimeoutMs?: number;
+  /**
+   * 捕获到 DSH 启动网址（`dsh web: http://host:port/?token=…`）时的回调。
+   * DSH ≥0.1.2 鉴权：该 URL 是兑换浏览器会话 cookie 的唯一入口（见 dsh-client-connection）。
+   * 回调收到的是**原文**（含一次性 token，仅用于兑换请求，不得写日志/提示）。
+   */
+  onLaunchUrl?: (url: string) => void;
 }
 
 /** 启动总超时默认值（毫秒） */
@@ -68,6 +75,8 @@ export class ServiceManager {
   private stopRequested = false;
   /** 插件自己启动的子进程（复用外部服务时为 null） */
   private child: ChildProcessLike | null = null;
+  /** stdout 行拆分缓冲：data 事件可能任意分片，跨 chunk 的行先缓存，遇换行再解析启动网址 */
+  private stdoutPartial = '';
   private disposed = false;
   /** 父进程退出时杀掉子进程，防止僵尸（stopOnExit=false 时移除） */
   private parentExitHook = (): void => {
@@ -288,7 +297,29 @@ export class ServiceManager {
       childExited = true;
       this.handleUnexpectedExit(child);
     });
-    child.stdout?.on('data', (chunk) => this.deps.log(`[stdout] ${chunk.toString().trimEnd()}`));
+    child.stdout?.on('data', (chunk) => {
+      const text = chunk.toString();
+      // 日志打码：启动网址行含一次性登录 token，输出通道（及 dsh.copyLogs 复制的内容）
+      // 不做可复制凭据残留——解析仍用原文 text，打码只作用于日志文本。
+      this.deps.log(`[stdout] ${text.replace(/([?&]token=)[A-Za-z0-9_-]+/g, '$1***').trimEnd()}`);
+      // 行级解析启动网址（0.1.2 打印 `dsh web: http://127.0.0.1:<port>/?token=<43字符>`），
+      // 供扩展兑换浏览器会话 cookie。data 事件可能任意分片，故先累加再按 \n 切行，
+      // 最后一段（可能不完整）留回缓冲。
+      this.stdoutPartial += text;
+      const lines = this.stdoutPartial.split('\n');
+      this.stdoutPartial = lines.pop() ?? '';
+      for (const line of lines) {
+        const url = parseLaunchUrlLine(line);
+        if (url === null) continue; // 噪音行：忽略
+        // 只认与当前目标端口一致且优先环回地址的候选，排除同行 (LAN: …) 等不可靠条目
+        const picked = pickLaunchUrl([url], this.opts.port);
+        if (picked !== null) {
+          // 日志只记 host:port，绝不含 token
+          this.deps.log(`[process] 捕获 DSH 启动网址（host:port=${new URL(picked).host}）`);
+          this.deps.onLaunchUrl?.(picked);
+        }
+      }
+    });
     child.stderr?.on('data', (chunk) => this.deps.log(`[stderr] ${chunk.toString().trimEnd()}`));
 
     // 等待就绪：轮询探测直到 ready / 子进程退出 / 超时

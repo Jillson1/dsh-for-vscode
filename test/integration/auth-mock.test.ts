@@ -17,6 +17,22 @@ import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { probeService } from '../../src/service/detect';
+import {
+  exchangeSession,
+  probeSession,
+  type SessionStore,
+  type StoredSession,
+} from '../../src/service/session';
+
+/** 内存会话存储（与 test/session.test.ts 同形，便于本地断言不落 globalState） */
+function memStore(): SessionStore {
+  const map = new Map<string, StoredSession>();
+  return {
+    get: (k) => map.get(k),
+    set: (k, v) => void map.set(k, v),
+    delete: (k) => void map.delete(k),
+  };
+}
 
 /** 复现器监听端口（与 .dsh-auth-mock/server.mjs 的 PORT 常量一致） */
 const MOCK_PORT = 3939;
@@ -79,4 +95,25 @@ test('复现器协议契约：带上会话 cookie 后首页返回 200（浏览�
     headers: { cookie: 'dsh-auth-mock=v1.mock' },
   });
   assert.equal(res.status, 200);
+});
+
+// —— 会话判定器「无启动网址」分支的区分依据（S2）——
+// ≤0.1.1（本机 rc.8 实测）**从不打印启动网址**，≥0.1.2 但由外部启动时扩展也读不到 stdout：
+// 两种情况都是「无启动网址」，必须靠一次**匿名探测**区分——200=不需要鉴权（旧版，直接可用），
+// 401/403=需要登录（≥0.1.2，显示引导页）。这两条断言把两个分支都钉住。
+test('判定器依据①：需要登录的服务匿名探测 → expired（⇒ 判「需要登录」）', async (t) => {
+  if (!(await ensureMock(t))) return;
+  const store = memStore();
+  const probe = await probeSession(`127.0.0.1:${MOCK_PORT}`, { fetchImpl: fetch, store });
+  assert.equal(probe, 'expired', '复现器无 cookie 时回 401，判定器必须据此走「需要登录」分支');
+});
+
+test('判定器依据②：会话有效时匿名探测 → ok（⇒ 判「直接可用」）', async (t) => {
+  if (!(await ensureMock(t))) return;
+  const store = memStore();
+  const authority = `127.0.0.1:${MOCK_PORT}`;
+  const r = await exchangeSession(`${MOCK_BASE}/?token=${MOCK_TOKEN}`, { fetchImpl: fetch, store });
+  assert.equal(r.status, 'ok', `兑换应成功，实际：${JSON.stringify(r)}`);
+  const probe = await probeSession(authority, { fetchImpl: fetch, store });
+  assert.equal(probe, 'ok', '带会话探测应回 200');
 });

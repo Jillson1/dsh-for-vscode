@@ -8,6 +8,14 @@ import { readConfig, type DshConfig } from './config';
 import { probeService } from './service/detect';
 import { createProcessRunner, findInPath, resolveNpmGlobalNodeModules } from './service/process';
 import { ServiceManager, type ManagerOptions } from './service/manager';
+import {
+  exchangeSession,
+  getValidSession,
+  parseLaunchTarget,
+  probeSession,
+  type SessionStore,
+  type StoredSession,
+} from './service/session';
 import { DshPanelProvider } from './panel/provider';
 import { AgentStatusController, StatusBarController } from './statusbar';
 import { resolveWorkspaceRoot } from './workspaceRoot';
@@ -62,6 +70,12 @@ import { revealLineInEditor } from './editorReveal';
 
 let manager: ServiceManager | null = null;
 let output: vscode.OutputChannel | null = null;
+/**
+ * 本次会话捕获/提交的 DSH 启动网址（含一次性 token）。
+ * 仅用于会话兑换请求与（S4 起）「复制网址 / 在浏览器打开」；
+ * **绝不进日志、提示或 iframe 地址栏之外的地方**。
+ */
+let latestLaunchUrl: string | null = null;
 /** A 组修改服务（activate 内装配；命令 handler 经模块级引用） */
 let diffService: DiffService | null = null;
 
@@ -533,6 +547,138 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  // —— DSH ≥0.1.2 浏览器鉴权：启动网址捕获 + 会话兑换（S2）——
+  // 背景：0.1.2 起服务启动时在 stdout 打印 `dsh web: http://host:port/?token=…`，
+  // 访问该网址可换取签名会话 cookie（30 天）；不带 cookie 的请求一律 401。
+  // 本步只做「捕获 + 兑换 + 记账」：cookie 先落进 globalState；把它注入面板 iframe
+  // 所需的本地代办代理与面板三态分别在 S3 / S4 落地。
+  //
+  // 凭据纪律：launch URL 含一次性 token，只进 requests 与内存变量，
+  // 绝不进日志/提示/剪贴板（日志侧由 manager 统一打码）。
+  const sessionStore: SessionStore = {
+    get: (key) => context.globalState.get<StoredSession>(key),
+    // globalState.update 返回 Thenable：写入失败（罕见）不应中断鉴权流程
+    set: (key, value) => void context.globalState.update(key, value).then(undefined, () => {}),
+    delete: (key) => void context.globalState.update(key, undefined).then(undefined, () => {}),
+  };
+
+  /** 当前服务 authority（host:port；会话 cookie 与代理 Host 重写都以它为准） */
+  function serviceAuthority(): string {
+    const { host, port } = manager!.getTarget();
+    return `${host}:${port}`;
+  }
+
+  /** 兑换防并发（onLaunchUrl 与 ready 两条触发源可能几乎同时到达） */
+  let authBusy = false;
+  /**
+   * 装配钩子（按步骤逐步接线，未接时为 null，调用处用 `?.()`）：
+   * - S3 填入「确保本地代办代理已启动」；
+   * - S4 填入「让两个面板按最新会话状态重渲染」。
+   */
+  let ensureAuthProxyStarted: (() => void) | null = null;
+  let refreshAuthPanels: (() => void) | null = null;
+  /**
+   * 会话状态三态（S4 的 provider 消费它渲染面板）：
+   * - ok    = 可直接进 iframe（已换到会话，或服务本就不需要鉴权）
+   * - needed= 需要用户粘贴启动网址（≥0.1.2 且扩展拿不到网址/网址已失效）
+   * - pending = 判定中（面板显示加载动画）
+   */
+  let authSessionState: 'ok' | 'needed' | 'pending' = 'pending';
+  /** 启动网址宽限已用标记（见 runAuthOnce 的「无启动网址」分支） */
+  let launchGraceUsed = false;
+
+  /** 设置会话状态并记一条迁移日志（S2 起可观测现场，S4 起驱动面板渲染） */
+  function setAuthState(next: 'ok' | 'needed' | 'pending'): void {
+    if (authSessionState === next) return;
+    appendLog(`[auth] 会话状态：${authSessionState} → ${next}`);
+    authSessionState = next;
+    refreshAuthPanels?.();
+  }
+
+  /**
+   * 会话判定与（需要时）兑换，幂等：
+   * 1. 存储里有未过期会话 → ok；
+   * 2. 有启动网址但无 token（≤0.1.1 的裸地址）→ ok（无鉴权，不兑换）；
+   * 3. 有带 token 的启动网址 → 兑换：成功 ok / 失败 needed（网址已随服务重启失效）；
+   * 4. 都没有 → 宽限 2.5s 等 stdout 网址；仍无则**探测一次区分两代**：
+   *    匿名 200 = 服务不需要鉴权（≤0.1.1 从不打印启动网址，实测 rc.8 的包里
+   *    既无 `dsh web:` 亦无 token 输出）→ ok；401/403 = 外部启动的 ≥0.1.2 → needed。
+   *
+   * ⚠️ 第 4 条的无 cookie 探测是**本实现相对上游的必要偏离**：上游仅凭「没有启动网址」
+   * 就判 needed，在 ≤0.1.1（本机 rc.8）上会把本该直接可用的面板判成「需要登录」引导页，
+   * 违反「≤0.1.1 行为完全不变」的红线。
+   */
+  async function runAuthOnce(): Promise<void> {
+    if (authBusy || manager === null) return;
+    authBusy = true;
+    try {
+      const authority = serviceAuthority();
+      if (getValidSession(authority, { fetchImpl: fetch, store: sessionStore }) !== undefined) {
+        const existing = getValidSession(authority, { fetchImpl: fetch, store: sessionStore })!;
+        appendLog(`[auth] 已有有效会话（${authority}，有效期至 ${new Date(existing.expiresAt).toLocaleString()}）`);
+        setAuthState('ok');
+        ensureAuthProxyStarted?.();
+        refreshAuthPanels?.();
+        return;
+      }
+      const launch = latestLaunchUrl;
+      if (launch === null) {
+        // 无启动网址：可能是「≤0.1.1 从不打印」（无需登录）或「≥0.1.2 但扩展读不到
+        // stdout（外部启动）」。先宽限等 stdout 网址到达，再探测区分。
+        if (!launchGraceUsed) {
+          launchGraceUsed = true;
+          appendLog('[auth] 服务已就绪但启动网址尚未到达，等待 2.5s 后重判…');
+          setTimeout(() => void runAuthOnce(), 2500);
+          return;
+        }
+        const probe = await probeSession(authority, { fetchImpl: fetch, store: sessionStore });
+        if (probe === 'expired') {
+          appendLog('[auth] 服务需要浏览器登录且扩展没有会话（由外部启动）：等待用户提供启动网址');
+          setAuthState('needed');
+        } else if (probe === 'ok') {
+          appendLog('[auth] 服务允许匿名访问（≤0.1.1 无浏览器鉴权），无需会话');
+          setAuthState('ok');
+        } else {
+          // 服务不可达：状态页由 manager 驱动，保持 pending 等 ready 的 onChange 重触发
+          appendLog('[auth] 会话判定探测失败（服务暂不可达），保持等待');
+        }
+        ensureAuthProxyStarted?.();
+        refreshAuthPanels?.();
+        return;
+      }
+      if (parseLaunchTarget(launch) === null) {
+        // 旧版 dsh（≤0.1.1）：启动网址不带 token，无浏览器鉴权，无需会话
+        appendLog('[auth] dsh 无浏览器鉴权（≤0.1.1），无需会话');
+        setAuthState('ok');
+        ensureAuthProxyStarted?.();
+        refreshAuthPanels?.();
+        return;
+      }
+      const r = await exchangeSession(launch, { fetchImpl: fetch, store: sessionStore });
+      if (r.status === 'ok') {
+        appendLog(`[auth] 会话兑换成功（${r.authority}，有效期至 ${new Date(r.expiresAt).toLocaleString()}）`);
+        setAuthState('ok');
+      } else if (r.status === 'no-auth') {
+        appendLog('[auth] dsh 无浏览器鉴权，无需会话');
+        setAuthState('ok');
+      } else {
+        // 网址已随服务重启失效：面板引导用户粘贴最新启动网址（S4）
+        appendLog(`[auth] 启动网址兑换失败：${r.reason}`);
+        setAuthState('needed');
+      }
+      ensureAuthProxyStarted?.();
+      refreshAuthPanels?.();
+    } catch (err) {
+      // 网络级异常（瞬时断连等）：只记日志；仅当服务仍就绪时延时重试，否则等 ready 的 onChange
+      appendLog(`[auth] 会话判定异常：${String(err)}`);
+      if (manager?.getSnapshot().state === 'ready') {
+        setTimeout(() => void runAuthOnce(), 3000);
+      }
+    } finally {
+      authBusy = false;
+    }
+  }
+
   manager = new ServiceManager(toManagerOptions(config), {
     probeService,
     processRunner: createProcessRunner(),
@@ -540,6 +686,14 @@ export function activate(context: vscode.ExtensionContext): void {
     // 端口被占用自动临时替换成功：弹窗告知用户新端口（仅本次会话，配置未变）
     onPortFallback: (requested, fallback) => {
       void vscode.window.showInformationMessage(t('msg.portFallback', { port: requested, fallback }));
+    },
+    // 捕获子进程 stdout 打印的启动网址（`dsh web: http://…/?token=…`）→ 自动会话兑换。
+    // 回调拿到的是原文（含 token），日志里只记「已捕获」，不落明文。
+    onLaunchUrl: (url) => {
+      latestLaunchUrl = url;
+      appendLog('[auth] 已捕获 DSH 启动网址（含登录 token），将自动完成登录');
+      // 未就绪时由 ready 的 onChange 统一触发；已就绪则立即兑换
+      if (manager?.getSnapshot().state === 'ready') void runAuthOnce();
     },
   });
   manager.setExitBehavior(!config.stopOnExit);
@@ -1203,6 +1357,8 @@ ${sample}${more}`,
   manager.onChange((s) => {
     if (s.state === 'ready') {
       startHandshakeTimeout(); // 服务就绪：若面板已打开，启动握手超时
+      // 会话判定/兑换：自启场景全自动；外部服务落「需要登录」（S4 显示引导页）
+      void runAuthOnce();
     }
   });
 
