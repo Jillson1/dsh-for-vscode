@@ -13,9 +13,11 @@ import {
   getValidSession,
   parseLaunchTarget,
   probeSession,
+  dropSession,
   type SessionStore,
   type StoredSession,
 } from './service/session';
+import { createDshProxy, type DshProxy } from './service/proxy';
 import { DshPanelProvider } from './panel/provider';
 import { AgentStatusController, StatusBarController } from './statusbar';
 import { resolveWorkspaceRoot } from './workspaceRoot';
@@ -76,6 +78,16 @@ let output: vscode.OutputChannel | null = null;
  * **绝不进日志、提示或 iframe 地址栏之外的地方**。
  */
 let latestLaunchUrl: string | null = null;
+/**
+ * 本地代办代理实例与就绪标志（S3 起装配）。
+ *
+ * 为什么需要代理：DSH ≥0.1.2 的会话 cookie 是 `HttpOnly; SameSite=Strict; Host 绑定`，
+ * 而面板 iframe 的顶层文档是 `vscode-webview://…`（跨站）——浏览器在这种上下文里
+ * **永远不会回送** Strict cookie，因此 iframe 不能直连 DSH，必须由扩展持 cookie 并经
+ * 回环代理转发（同时重写 Host、剥离浏览器来源头以通过 browser-trust fence）。
+ */
+let authProxy: DshProxy | null = null;
+let authProxyStarted = false;
 /** A 组修改服务（activate 内装配；命令 handler 经模块级引用） */
 let diffService: DiffService | null = null;
 
@@ -570,13 +582,56 @@ export function activate(context: vscode.ExtensionContext): void {
 
   /** 兑换防并发（onLaunchUrl 与 ready 两条触发源可能几乎同时到达） */
   let authBusy = false;
-  /**
-   * 装配钩子（按步骤逐步接线，未接时为 null，调用处用 `?.()`）：
-   * - S3 填入「确保本地代办代理已启动」；
-   * - S4 填入「让两个面板按最新会话状态重渲染」。
-   */
-  let ensureAuthProxyStarted: (() => void) | null = null;
+  /** 装配钩子：S4 填入「让两个面板按最新会话状态重渲染」（未接时为 null，调用处用 `?.()`） */
   let refreshAuthPanels: (() => void) | null = null;
+
+  /**
+   * 确保本地代办代理已启动（幂等）。代理目标**每次请求前动态求值**，因此服务重启、
+   * 重新兑换、端口回退都无需重启代理。
+   *
+   * 三种目标状态：
+   * - 服务未就绪 → `null` ⇒ 代理回 503（页面状态由 manager 驱动）；
+   * - 就绪且有会话 → 带 cookie 转发（DSH ≥0.1.2）；
+   * - 就绪但**无会话** → `cookie: undefined` ⇒ **直通转发**。
+   *   ⚠️ 红线：无会话绝不能 503——≤0.1.1 无鉴权服务若被代理拦成 503，本来可用的面板
+   *   会整体不可用（本机 rc.8 就是这条路径）。≥0.1.2 若 cookie 丢失，代理会收到 401
+   *   并触发 onAuthFailure 重新判定，而不是让面板卡死。
+   */
+  function ensureAuthProxyStarted(): void {
+    if (authProxyStarted || manager === null) return;
+    const proxy = createDshProxy({
+      getTarget: () => {
+        if (manager!.getSnapshot().state !== 'ready') return null;
+        const { host, port } = manager!.getTarget();
+        const session = getValidSession(`${host}:${port}`, { fetchImpl: fetch, store: sessionStore });
+        return { url: `http://${host}:${port}`, cookie: session?.cookie };
+      },
+      // 上游 401（会话失效/服务端凭据被重置）：丢会话并回到 pending → runAuthOnce 重判
+      // （自启且有可用启动网址则自动重兑；外部服务则落到「需要登录」引导页，不永久卡 401）
+      onAuthFailure: () => {
+        if (authSessionState !== 'ok') return; // 防抖：一次页面加载会产生多个并发 401
+        appendLog('[auth] 上游返回 401：会话失效，重新判定…');
+        const { host, port } = manager!.getTarget();
+        dropSession(`${host}:${port}`, { fetchImpl: fetch, store: sessionStore });
+        setAuthState('pending');
+        setTimeout(() => void runAuthOnce(), 500);
+      },
+      log: (line) => appendLog(line),
+    });
+    authProxy = proxy;
+    void proxy.start()
+      .then(() => {
+        if (authProxy !== proxy) return; // 启动期间已被停用/替换：不置位、不刷新
+        authProxyStarted = true;
+        appendLog(`[proxy] 本地代办就绪 http://127.0.0.1:${proxy.port}`);
+        refreshAuthPanels?.();
+      })
+      .catch((err) => {
+        // 启动失败（端口耗尽等罕见）：复位以便下次判定时重试
+        if (authProxy === proxy) authProxy = null;
+        appendLog(`[proxy] 本地代办启动失败: ${String(err)}`);
+      });
+  }
   /**
    * 会话状态三态（S4 的 provider 消费它渲染面板）：
    * - ok    = 可直接进 iframe（已换到会话，或服务本就不需要鉴权）
@@ -1690,6 +1745,17 @@ function onConfigChanged(): void {
 
 /** 插件停用：按 stopOnExit 决定是否停止自启服务（只杀插件自启的） */
 export async function deactivate(): Promise<void> {
+  // 停用本地代办代理：**必须在 manager.stop() 之前**——代理的 getTarget 依赖 manager 状态，
+  // 先停服务会让代理在短暂窗口内拿到「服务不可达」的转发结果。
+  // 会话 cookie 保留在 globalState，下次激活继续有效（无需重新登录）。
+  if (authProxyStarted && authProxy !== null) {
+    try {
+      await authProxy.stop();
+    } catch {
+      // 停用清理失败不影响扩展退出
+    }
+    authProxyStarted = false;
+  }
   const config = readConfig().config;
   if (config.stopOnExit) await manager?.stop();
   manager?.dispose();

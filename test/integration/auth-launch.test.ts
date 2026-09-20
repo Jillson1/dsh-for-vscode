@@ -25,6 +25,7 @@ import { hasDsh, dshVersion } from '../dsh-availability';
 import { probeService } from '../../src/service/detect';
 import { createProcessRunner } from '../../src/service/process';
 import { ServiceManager } from '../../src/service/manager';
+import { createDshProxy } from '../../src/service/proxy';
 import {
   exchangeSession,
   parseLaunchTarget,
@@ -152,6 +153,31 @@ test('真实 dsh：启动网址捕获 + 凭据卫生 + 版本自适应判定（�
 
     // 实测证据：网址到达通常晚于 ready（宽限期不是可选项）
     assert.ok(waitedMs >= 0, `启动网址等待 ${waitedMs}ms`);
+
+    // —— S3 验收门②：rc.8 回归的**核心一条** ——
+    // 无会话时代理必须**直通转发**（绝不 503）：≤0.1.1 无鉴权服务经代理后仍应完整可用。
+    // 用真实 dsh 验证：经代理取首页 → 200 且 body 含 __DSH_BOOT__（说明页面真的被代理过来了）。
+    const proxy = createDshProxy({
+      getTarget: () => ({ url: `http://${authority}` }), // 无 cookie ⇒ 直通
+    });
+    try {
+      await proxy.start();
+      const res = await fetch(proxy.baseUrl, { redirect: 'manual' });
+      assert.equal(res.status, 200, `无会话时经代理访问必须直通（200），实际 ${res.status}（503 即红线被破）`);
+      const body = await res.text();
+      assert.ok(body.includes('__DSH_BOOT__'), '经代理取回的应是 DSH 首页（含 __DSH_BOOT__ 启动数据）');
+      // 未就绪（getTarget=null）时才回 503
+      const p503 = createDshProxy({ getTarget: () => null });
+      await p503.start();
+      try {
+        const r503 = await fetch(p503.baseUrl, { redirect: 'manual' });
+        assert.equal(r503.status, 503, '服务未就绪时代理应回 503');
+      } finally {
+        await p503.stop();
+      }
+    } finally {
+      await proxy.stop();
+    }
   } finally {
     await manager.stop();
     manager.dispose();

@@ -17,6 +17,7 @@ import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { probeService } from '../../src/service/detect';
+import { createDshProxy } from '../../src/service/proxy';
 import {
   exchangeSession,
   probeSession,
@@ -116,4 +117,55 @@ test('判定器依据②：会话有效时匿名探测 → ok（⇒ 判「直接
   assert.equal(r.status, 'ok', `兑换应成功，实际：${JSON.stringify(r)}`);
   const probe = await probeSession(authority, { fetchImpl: fetch, store });
   assert.equal(probe, 'ok', '带会话探测应回 200');
+});
+
+// —— S3 本地代办代理：对复现器的端到端（这才是"面板经代理访问 DSH"的真实链路）——
+test('S3 验收门③：代理注入会话 cookie 后访问首页 → 200（服务端确实收到了 cookie）', async (t) => {
+  if (!(await ensureMock(t))) return;
+  const store = memStore();
+  await exchangeSession(`${MOCK_BASE}/?token=${MOCK_TOKEN}`, { fetchImpl: fetch, store });
+  const authority = `127.0.0.1:${MOCK_PORT}`;
+  const session = store.get(`auth-session:${authority}`);
+  assert.notEqual(session, undefined, '兑换后应能按 authority 取到会话');
+
+  // 代理每次请求动态求值目标（与扩展侧装配一致）
+  const proxy = createDshProxy({
+    getTarget: () => ({ url: MOCK_BASE, cookie: session?.cookie }),
+  });
+  await proxy.start();
+  try {
+    const res = await fetch(proxy.baseUrl, { redirect: 'manual' });
+    assert.equal(res.status, 200, '代理带 cookie 转发后应由复现器回 200');
+    // 复现器的 /after 会回显「服务器是否看到 cookie」；首页 200 本身即证明 cookie 生效
+    assert.equal(res.headers.get('set-cookie'), null, '代理必须剥离上游 set-cookie（不落 iframe cookie jar）');
+  } finally {
+    await proxy.stop();
+  }
+});
+
+test('S3 红线：代理在「就绪但无会话」时直通转发（401 透传，绝不 503）', async (t) => {
+  if (!(await ensureMock(t))) return;
+  const proxy = createDshProxy({
+    getTarget: () => ({ url: MOCK_BASE }), // 无 cookie
+  });
+  await proxy.start();
+  try {
+    const res = await fetch(proxy.baseUrl, { redirect: 'manual' });
+    assert.equal(res.status, 401, '无会话应透传上游的 401（≤0.1.1 场景则是 200）——503 会打断本来可用的面板');
+    assert.notEqual(res.status, 503);
+  } finally {
+    await proxy.stop();
+  }
+});
+
+test('S3 边界：服务未就绪（getTarget=null）时代理回 503', async (t) => {
+  if (!(await ensureMock(t))) return;
+  const proxy = createDshProxy({ getTarget: () => null });
+  await proxy.start();
+  try {
+    const res = await fetch(proxy.baseUrl, { redirect: 'manual' });
+    assert.equal(res.status, 503);
+  } finally {
+    await proxy.stop();
+  }
 });
