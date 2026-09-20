@@ -21,6 +21,8 @@ export type PanelMessage =
   | { type: 'bridgeReadTextAck'; requestId: string; ok: boolean; text?: string }
   | { type: 'bridgeInjectComposer'; text: string }
   | { type: 'bridgeAck'; ok: boolean; capabilities?: string[] }
+  /** DSH ≥0.1.2 登录引导页提交的启动网址（扩展负责校验与兑换，页面内不做任何逻辑） */
+  | { type: 'authSubmitLaunchUrl'; url: string }
   // —— 交互增强（bridge 0.4.0）上行消息 ——
   | ({ type: 'bridgeSessionState' } & SessionStateMsg)
   | { type: 'bridgeApprovalRequest'; sessionId: string; approvalId: string; toolName: string; callId?: string; reason?: string }
@@ -119,6 +121,11 @@ button:hover { background: var(--vscode-button-hoverBackground); }
 .spinner { width: 28px; height: 28px; border: 3px solid var(--vscode-progressBar-background); border-top-color: transparent; border-radius: 50%; margin: 0 auto 12px; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 iframe.frame { position: fixed; inset: 0; width: 100%; height: 100%; border: none; }
+/* DSH ≥0.1.2 登录引导页 */
+.auth-box { text-align: left; max-width: 92%; }
+.auth-step { opacity: 0.85; font-size: 12px; margin: 6px 0; }
+.auth-input { width: 100%; box-sizing: border-box; margin: 6px 0; padding: 5px 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 2px; font-family: var(--vscode-font-family); }
+.auth-hint { opacity: 0.7; font-size: 11px; margin: 4px 0 10px; }
 `;
 
 /** 按钮点击 → postMessage 的内联脚本（nonce 放行） */
@@ -147,16 +154,39 @@ function bridgeHandshakeScript(token: string, allowedOrigin: string): string {
 // dsh-bridge-handshake：DSH 页面桥接握手与消息路由（上行转发 + 剪贴板回执下行转发）
 const iframeEl = document.getElementById('dsh-frame');
 if (iframeEl) {
-  const iframeSrc = iframeEl.src;
   // 握手 token 与允许的 DSH 页面 origin
   const TOKEN = ${JSON.stringify(token)};
+  // 注意：ALLOWED_ORIGIN 由 provider 传入的**最终 iframe 地址**推导（DSH ≥0.1.2 鉴权下即
+  // 本地代办代理的 origin，而非 DSH 真实地址）——改 iframe 源时必须同步，否则上行全被拒。
   const ALLOWED_ORIGIN = ${JSON.stringify(allowedOrigin)};
   let bridgeAcked = false;
+  /**
+   * 判定上行消息来源是否可信。不能只做 ALLOWED_ORIGIN 严格相等：
+   * webview 的 service worker 可能重写 iframe 的回流 origin（remote 实测回流为
+   * vscode-webview://<uuid>，此时 postMessage 用 src 推导的 origin 作 targetOrigin 会直接抛错），
+   * 且 127.0.0.1 与 localhost 是同一服务的等价写法。
+   * 接收窗口已由 iframeEl.contentWindow 锁定，hello 自带 token 防伪，故这里放行等价来源。
+   */
+  function isAllowedBridgeOrigin(o) {
+    if (typeof o !== 'string') return false;
+    if (o === ALLOWED_ORIGIN) return true;
+    // webview SW 重写后的载体 origin（source 已限定为本 iframe，可接受）
+    if (o.startsWith('vscode-webview://')) return true;
+    // 127.0.0.1 / localhost / ::1 同端口互换（代办代理/隧道/WSL 场景 host 可能被替换）
+    try {
+      const a = new URL(ALLOWED_ORIGIN);
+      const b = new URL(o);
+      const loopback = (h) => h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
+      return loopback(a.hostname) && loopback(b.hostname) && a.port === b.port;
+    } catch {
+      return false;
+    }
+  }
   window.addEventListener('message', (e) => {
     const d = e.data;
     // —— 下行：扩展宿主回执（vscode.webview.postMessage 投递），转发给 iframe ——
     if (d && d.type === 'bridgeCopyTextAck' && typeof d.requestId === 'string' && typeof d.ok === 'boolean') {
-      iframeEl.contentWindow.postMessage({ kind: 'copyTextAck', requestId: d.requestId, ok: d.ok }, iframeSrc);
+      iframeEl.contentWindow.postMessage({ kind: 'copyTextAck', requestId: d.requestId, ok: d.ok }, '*');
       return;
     }
     // 剪贴板读取回执：转发给 iframe，供其 resolve 粘贴兜底的 readText Promise
@@ -166,13 +196,13 @@ if (iframeEl) {
         requestId: d.requestId,
         ok: d.ok,
         text: typeof d.text === 'string' ? d.text : undefined,
-      }, iframeSrc);
+      }, '*');
       return;
     }
     // 下行：扩展把文件引用注入 DSH composer（右键 "Add to DSH"）→ 转发给 iframe
     // 由 bridge client 再转给 dsh-file-jump 插件写输入框草稿。
     if (d && d.type === 'bridgeInjectComposer' && typeof d.text === 'string') {
-      iframeEl.contentWindow.postMessage({ kind: 'injectComposer', text: d.text }, iframeSrc);
+      iframeEl.contentWindow.postMessage({ kind: 'injectComposer', text: d.text }, '*');
       return;
     }
     // —— 下行（bridge 0.4.0）：交互增强新消息 → 转发给 iframe ——
@@ -184,7 +214,7 @@ if (iframeEl) {
         startLine: d.startLine,
         endLine: d.endLine,
         instruction: d.instruction,
-      }, iframeSrc);
+      }, '*');
       return;
     }
     if (d && d.type === 'bridgeApprovalDecision' && typeof d.sessionId === 'string' && typeof d.approvalId === 'string') {
@@ -193,7 +223,7 @@ if (iframeEl) {
         sessionId: d.sessionId,
         approvalId: d.approvalId,
         outcome: d.outcome,
-      }, iframeSrc);
+      }, '*');
       return;
     }
     if (d && d.type === 'bridgeQuestionAnswer' && typeof d.sessionId === 'string' && typeof d.questionId === 'string') {
@@ -202,7 +232,7 @@ if (iframeEl) {
         sessionId: d.sessionId,
         questionId: d.questionId,
         answer: d.answer,
-      }, iframeSrc);
+      }, '*');
       return;
     }
     if (d && d.type === 'bridgeCheckpointRestore' && typeof d.sessionId === 'string' && typeof d.checkpointId === 'string') {
@@ -216,15 +246,15 @@ if (iframeEl) {
         requestId: d.requestId,
         planId: d.planId,
         confirmation: d.confirmation,
-      }, iframeSrc);
+      }, '*');
       return;
     }
     if (d && d.type === 'bridgeRequestChanges' && typeof d.sessionId === 'string') {
-      iframeEl.contentWindow.postMessage({ kind: 'requestChanges', sessionId: d.sessionId }, iframeSrc);
+      iframeEl.contentWindow.postMessage({ kind: 'requestChanges', sessionId: d.sessionId }, '*');
       return;
     }
-    // —— 上行：iframe 发来的消息，origin + source 双重校验 ——
-    if (e.origin !== ALLOWED_ORIGIN || e.source !== iframeEl.contentWindow) return;
+    // —— 上行：iframe 发来的消息，source + 来源校验 ——
+    if (e.source !== iframeEl.contentWindow || !isAllowedBridgeOrigin(e.origin)) return;
     // 握手回执：统一形状 { kind:'bridgeAck', ok }（不带 token 字段），只读 ok
     if (d && d.kind === 'bridgeAck') {
       bridgeAcked = true;
@@ -343,24 +373,23 @@ if (iframeEl) {
       vscode.postMessage({ type: 'bridgeReadText', requestId: d.requestId });
     }
   });
-  // iframe 加载完成后下发握手消息（携带 token）。
-  // DSH 的 client 插件 factory 可能在 load 之后才 materialize（冷启动页面资源加载慢，
-  // bridge 插件 materialize 可能晚于 load 数秒），握手消息会丢失，因此收到 bridgeAck 前
-  // 每 250ms 重发一次，最多重试 10 秒（与扩展握手超时对齐，避免慢启动误判 degraded）。
-  iframeEl.addEventListener('load', () => {
-    let helloAttempts = 0;
-    const sendHello = () => {
-      if (!bridgeAcked && iframeEl.contentWindow) {
-        iframeEl.contentWindow.postMessage({ kind: 'bridgeHello', token: TOKEN }, iframeSrc);
-      }
-    };
+  // 下发握手消息（携带 token）。**不挂在 iframe 的 load 事件上**：本机直连时 iframe
+  // 毫秒级完成加载，而本脚本在 body 尾部才注册监听——事件早已错过，hello 循环永不启动
+  // （上游 issue #13-4 实测）。改为脚本执行即启动；DSH 的 client 插件 factory 可能在页面
+  // 加载后才 materialize（实测 1.5~3s），故收到 bridgeAck 前每 250ms 重发一次，最长 15 秒
+  // （覆盖慢启动/远程场景；扩展侧握手超时同步放宽）。
+  let helloAttempts = 0;
+  const sendHello = () => {
+    if (!bridgeAcked && iframeEl.contentWindow) {
+      iframeEl.contentWindow.postMessage({ kind: 'bridgeHello', token: TOKEN }, '*');
+    }
+  };
+  sendHello();
+  const helloRetry = setInterval(() => {
+    helloAttempts += 1;
+    if (bridgeAcked || helloAttempts > 60) { clearInterval(helloRetry); return; }
     sendHello();
-    const helloRetry = setInterval(() => {
-      helloAttempts += 1;
-      if (bridgeAcked || helloAttempts > 40) { clearInterval(helloRetry); return; }
-      sendHello();
-    }, 250);
-  });
+  }, 250);
 }`;
 }
 
@@ -434,11 +463,68 @@ export function stoppedPage(t: T, ctx: PageCtx): string {
 }
 
 /**
+ * 需要登录占位页（DSH ≥0.1.2 浏览器鉴权）。
+ *
+ * 展示时机：服务已就绪、但扩展拿不到可用会话——典型是「DSH 由扩展之外启动」（扩展读不到
+ * 它的 stdout 启动日志），或启动网址已随服务重启失效。用户把 `dsh web: …` 那一行粘进来
+ * 即可完成一次登录（会话最长 30 天）。
+ *
+ * 页面内**不做任何校验/兑换逻辑**，只把输入原样 postMessage 给扩展（扩展负责校验 authority
+ * 是否与当前服务一致、兑换、持久化与提示）。
+ *
+ * ⚠️ 脚本**不得再次声明 `vscode`**：公共段（BUTTON_SCRIPT）已在顶层用
+ * `acquireVsCodeApi()` 声明过；顶层重复声明会抛 SyntaxError 使整段脚本失效（上游 3cca6cc 的坑，
+ * 症状是"按钮点了没反应"）。这里直接复用外层 `vscode`。
+ */
+export function authRequiredPage(t: T, ctx: PageCtx): string {
+  const inputScript = `
+// 复用 BUTTON_SCRIPT 已声明的 vscode（见上：不得重复声明）
+const authInput = document.getElementById('auth-url-input');
+const authHint = document.getElementById('auth-hint');
+const authBtn = document.getElementById('auth-submit');
+function submitAuthUrl() {
+  const url = ((authInput && authInput.value) || '').trim();
+  if (url === '') return;
+  if (authBtn) authBtn.disabled = true;
+  if (authHint) authHint.textContent = ${JSON.stringify(t('panel.authSubmitting'))};
+  vscode.postMessage({ type: 'authSubmitLaunchUrl', url: url });
+}
+if (authBtn) authBtn.addEventListener('click', submitAuthUrl);
+if (authInput) {
+  authInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submitAuthUrl(); }
+  });
+}
+`;
+  return shell(
+    ctx,
+    t('panel.authTitle'),
+    '',
+    `<div class="center auth-box">
+<p><strong>${t('panel.authTitle')}</strong></p>
+<p>${t('panel.authExplain')}</p>
+<p class="auth-step">${t('panel.authStep1')}</p>
+<p class="auth-step">${t('panel.authStep2')}</p>
+<input id="auth-url-input" class="auth-input" type="text" spellcheck="false"
+  placeholder="${escapeHtml(t('panel.authPlaceholder'))}" />
+<p id="auth-hint" class="auth-hint">${t('panel.authHint')}</p>
+<button id="auth-submit">${t('panel.authSubmit')}</button>
+</div>`,
+    `<script nonce="${ctx.nonce}">${inputScript}</script>`,
+  );
+}
+
+/**
  * 就绪页：全屏 iframe 加载真实 DSH 网页（无 sandbox，避免破坏页面自身功能）。
  * iframe 显式声明 allow="clipboard-write" 作为第一层修复；但 VS Code 对 webview 内跨源 iframe 的
  * 原生剪贴板 API 仍存在权限拦截（microsoft/vscode#182642），因此还需桥接脚本把 DSH 页面内的
  * writeText 转发给扩展宿主（vscode.env.clipboard）执行，才能真正写入系统剪贴板。
  * 桥接启用时注入握手脚本，让顶层 webview 与 DSH 页面 iframe 建立握手并转发跳转/剪贴板消息。
+ *
+ * ⚠️ `url` 与 CSP 必须同源：DSH ≥0.1.2 鉴权下该 url 是**本地代办代理**的地址（不是 DSH 真实
+ * 地址），`allowedOrigin` 由它推导。provider 侧必须用同一个 frameUrl 生成 `ctx.frameHosts`，
+ * 否则会出现"iframe src 已换代理地址、CSP 仍放行旧地址"的**不同步白屏**。
+ *
  * @param bridge 桥接配置（可选，向后兼容既有调用）：token 为握手凭据，enabled 为是否注入握手脚本
  */
 export function readyPage(url: string, ctx: PageCtx, bridge?: { token: string; enabled: boolean }): string {

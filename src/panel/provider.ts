@@ -12,10 +12,29 @@ import {
   disconnectedPage,
   stoppedPage,
   readyPage,
+  authRequiredPage,
   type PanelDownlink,
   type PanelMessage,
   type PageCtx,
 } from './html';
+
+/**
+ * 会话/代理状态（由扩展注入）：驱动 ready 分支的三态渲染。
+ * - `ok`      = 可直接进 iframe（已换到会话，或服务本就不需要鉴权）
+ * - `needed`  = 需要用户粘贴启动网址（DSH ≥0.1.2 且扩展拿不到网址/网址已失效）
+ * - `pending` = 判定中，显示加载动画
+ */
+export type AuthUiState = 'ok' | 'needed' | 'pending';
+
+/** 面板增强接线（DSH ≥0.1.2 鉴权适配）；均可选，缺省保持旧行为 */
+export interface PanelProviderUiOpts {
+  /** 会话状态 getter：`ok` 进 iframe；`needed` 显示登录引导页；`pending`/undefined 显示加载中 */
+  authState?: () => AuthUiState | undefined;
+  /** iframe 基地址覆盖：本地代办代理就绪后返回其 baseUrl；null/undefined = 回退 DSH 真实地址 */
+  frameBaseOverride?: () => string | null;
+  /** 登录引导页提交启动网址的回调（扩展负责校验与兑换，页面内不做逻辑） */
+  onAuthUrlSubmit?: (url: string) => void;
+}
 
 export class DshPanelProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | null = null;
@@ -47,9 +66,22 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
      * 后续阶段（F1/F6/F7/F8/F9）改注入真实服务或在此分发。
      */
     private logBridgeEvent?: (event: BridgeUplinkEvent) => void,
+    /** DSH ≥0.1.2 鉴权接线：会话三态 / iframe 基址覆盖 / 登录引导页提交 */
+    private ui: PanelProviderUiOpts = {},
   ) {
     // 订阅状态变化，重绘面板（iframe 与占位页由状态驱动，无白屏路径）
     manager.onChange(() => this.render());
+  }
+
+  /**
+   * 强制按最新状态重渲染。
+   *
+   * 为什么需要它：`manager.onChange` 覆盖不到「会话兑换完成」「代办代理 start 完成」
+   * 这两个触发源——缺了它，面板会停在"加载中"（pending）或旧的三态页上不更新。
+   * 由扩展侧在会话状态迁移/代理就绪后调用（两个面板都要刷）。
+   */
+  refresh(): void {
+    this.render();
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -115,6 +147,11 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
         break;
       case 'showLogs':
         void vscode.commands.executeCommand('dsh.showLogs');
+        break;
+      case 'authSubmitLaunchUrl':
+        // DSH ≥0.1.2 登录引导页提交的启动网址：转交扩展校验与兑换
+        // （authority 一致性校验、兑换、持久化、成功/失败提示都在扩展侧）
+        this.ui.onAuthUrlSubmit?.(msg.url);
         break;
       case 'bridgeCopyText':
         // 桥接剪贴板消息：VS Code 会拦截跨源 iframe 的原生 clipboard API，
@@ -235,13 +272,32 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
     const s = this.manager.getSnapshot();
     let html: string;
     switch (s.state) {
-      case 'ready':
+      case 'ready': {
         this.wasConnected = true;
-        html = readyPage(s.url ?? `http://${host}:${port}/`, ctx, {
+        const authState = this.ui.authState?.();
+        // —— 会话三态（DSH ≥0.1.2）——
+        // pending：兑换/判定中 → 加载动画；needed：需要粘贴启动网址 → 登录引导页；
+        // ok（含旧版无鉴权）：正常进 iframe。
+        if (authState === 'pending') {
+          html = loadingPage(t, ctx);
+          break;
+        }
+        if (authState === 'needed') {
+          html = authRequiredPage(t, ctx);
+          break;
+        }
+        // —— iframe 与 CSP 必须同源（单一推导）——
+        // 先定「最终加载地址」frameUrl（鉴权下是本地代办代理地址，否则是 DSH 真实地址），
+        // 再由它推导 CSP frame-src；readyPage 内部也用同一个 url 推导桥接握手的 allowedOrigin。
+        // 若这里硬编码 `http://host:port`，iframe 改指代理后会被 CSP 直接拒绝 → 面板白屏。
+        const frameUrl = this.ui.frameBaseOverride?.() ?? s.url ?? `http://${host}:${port}/`;
+        ctx.frameHosts = [new URL(frameUrl).origin];
+        html = readyPage(frameUrl, ctx, {
           token: this.bridgeToken,
           enabled: this.bridgeEnabled(), // 由 dsh.bridge.enabled 配置驱动（Task 7 接入）
         });
         break;
+      }
       case 'failed':
         html = errorPage(t, ctx, s.error ? t(s.error, s.errorVars) : t('err.loadFailed'));
         break;

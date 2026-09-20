@@ -18,7 +18,7 @@ import {
   type StoredSession,
 } from './service/session';
 import { createDshProxy, type DshProxy } from './service/proxy';
-import { DshPanelProvider } from './panel/provider';
+import { DshPanelProvider, type PanelProviderUiOpts } from './panel/provider';
 import { AgentStatusController, StatusBarController } from './statusbar';
 import { resolveWorkspaceRoot } from './workspaceRoot';
 import { addFileToDsh, addSelectionToDsh, type AddToDshTargets } from './addToDsh';
@@ -582,7 +582,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   /** 兑换防并发（onLaunchUrl 与 ready 两条触发源可能几乎同时到达） */
   let authBusy = false;
-  /** 装配钩子：S4 填入「让两个面板按最新会话状态重渲染」（未接时为 null，调用处用 `?.()`） */
+  /**
+   * 让两个面板按最新会话状态重渲染（面板实例在下方构造后赋值）。
+   * 触发源：会话状态迁移（setAuthState）、代理 start 完成——两者都不经过 manager.onChange。
+   */
   let refreshAuthPanels: (() => void) | null = null;
 
   /**
@@ -731,6 +734,75 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     } finally {
       authBusy = false;
+    }
+  }
+
+  /**
+   * 面板 UI 接线：会话三态 + iframe 基址覆盖 + 登录网址提交。
+   * 每次 render 都会调用，故所有值都按"当前"求值（getter 形态），不做快照。
+   */
+  function authPanelUi(): PanelProviderUiOpts {
+    return {
+      authState: () => authSessionState,
+      frameBaseOverride: () => {
+        if (!authProxyStarted || manager?.getSnapshot().state !== 'ready') return null;
+        const { host, port } = manager.getTarget();
+        const session = getValidSession(`${host}:${port}`, { fetchImpl: fetch, store: sessionStore });
+        // 只有**确实持有会话**（DSH ≥0.1.2 兑换成功）才把 iframe 指向代理。
+        // ≤0.1.1（本机 rc.8）没有会话 → 返回 null → iframe 仍用 DSH 真实地址，
+        // 行为与改造前**完全一致**（红线①）；此时代理虽然也在跑，但没有任何页面经过它。
+        return session === undefined ? null : (authProxy?.baseUrl ?? null);
+      },
+      onAuthUrlSubmit: (url) => void handleAuthUrlSubmit(url),
+    };
+  }
+
+  /**
+   * 登录引导页提交的启动网址：校验 → 兑换 → 反馈。
+   * 校验两道：① 能抠出 http(s) 网址；② 必须是带 token 的启动网址（裸地址 ⇒ 旧版无鉴权）；
+   * ③ authority 必须与**正在运行的服务**一致，防止粘贴了另一台 DSH 的网址。
+   */
+  async function handleAuthUrlSubmit(rawUrl: string): Promise<void> {
+    try {
+      // 容错：用户常整行复制（带 `dsh web: ` 前缀与尾部 LAN 文本），只取第一个 http(s) 网址段
+      const m = /https?:\/\/[^\s]+/.exec(rawUrl);
+      if (m === null) {
+        void vscode.window.showErrorMessage(t('msg.authBadUrl'));
+        return;
+      }
+      const launch = m[0];
+      const target = parseLaunchTarget(launch);
+      if (target === null) {
+        void vscode.window.showErrorMessage(t('msg.authBadUrl'));
+        return;
+      }
+      const authority = serviceAuthority();
+      if (target.authority !== authority) {
+        void vscode.window.showWarningMessage(
+          t('msg.authMismatch', { urlHost: target.authority, targetHost: authority }),
+        );
+        return;
+      }
+      const r = await exchangeSession(launch, { fetchImpl: fetch, store: sessionStore });
+      if (r.status === 'ok') {
+        appendLog(`[auth] 手动登录成功（${r.authority}，有效期至 ${new Date(r.expiresAt).toLocaleString()}）`);
+        latestLaunchUrl = launch;
+        setAuthState('ok');
+        ensureAuthProxyStarted();
+        void vscode.window.showInformationMessage(t('msg.authOk'));
+      } else if (r.status === 'no-auth') {
+        // 外部启动的 ≤0.1.1：粘贴裸地址也能用（探测到 200 = 该服务不需要鉴权）
+        appendLog('[auth] 服务无浏览器鉴权（≤0.1.1），无需会话');
+        latestLaunchUrl = launch;
+        setAuthState('ok');
+        ensureAuthProxyStarted();
+      } else {
+        // 典型：给 0.1.2 粘了裸地址（无 token）→ 提示原因，让用户取完整启动网址
+        void vscode.window.showErrorMessage(t('msg.authRejected', { reason: r.reason }));
+      }
+      refreshAuthPanels?.();
+    } catch (err) {
+      void vscode.window.showErrorMessage(t('msg.authRejected', { reason: String(err) }));
     }
   }
 
@@ -1340,6 +1412,8 @@ ${sample}${more}`,
     await runQuickEdit(info, instruction);
   }
 
+  /** 两个面板实例集中登记：会话/代理状态变化时统一重渲染（onChange 之外的触发源） */
+  const panels: DshPanelProvider[] = [];
   const panelPrimary = new DshPanelProvider(
     manager,
     () => {
@@ -1351,6 +1425,7 @@ ${sample}${more}`,
     bridgeEnabledGetter, // bridgeEnabled：dsh.bridge.enabled 驱动握手脚本注入
     diffService, // A 组：修改服务（recordDiff / bridgeDiffApplied 共用）
     onUplinkEvent, // F6/F7：上行事件落点（sessionState / approvalRequest 已接管）
+    authPanelUi(), // DSH ≥0.1.2：会话三态 / 代理地址覆盖 / 登录提交
   );
   const panelSecondary = new DshPanelProvider(
     manager,
@@ -1360,7 +1435,13 @@ ${sample}${more}`,
     bridgeEnabledGetter,
     diffService,
     onUplinkEvent,
+    authPanelUi(),
   );
+  panels.push(panelPrimary, panelSecondary);
+  // 会话状态迁移与代理就绪后统一重渲染（这两个触发源不经过 manager.onChange）
+  refreshAuthPanels = () => {
+    for (const p of panels) p.refresh();
+  };
   new StatusBarController(manager);
   // F7：agent 状态项（与"服务状态"分开：一个是进程活着，一个是 agent 在干什么）
   const agentStatus = new AgentStatusController();
@@ -1411,8 +1492,9 @@ ${sample}${more}`,
   // 服务就绪后启动握手超时（若面板已打开）
   manager.onChange((s) => {
     if (s.state === 'ready') {
+      launchGraceUsed = false; // 新一轮服务：重置「启动网址宽限」，重新等待本轮 stdout 网址
       startHandshakeTimeout(); // 服务就绪：若面板已打开，启动握手超时
-      // 会话判定/兑换：自启场景全自动；外部服务落「需要登录」（S4 显示引导页）
+      // 会话判定/兑换：自启场景全自动；外部服务落「需要登录」（面板显示引导页）
       void runAuthOnce();
     }
   });
@@ -1679,24 +1761,36 @@ async function revertAllDiffs(): Promise<void> {
 }
 
 /** 在外部浏览器打开 DSH 页面 */
-async function openExternal(): Promise<void> {
+/**
+ * 用户浏览器可打开的 DSH 地址。
+ *
+ * DSH ≥0.1.2 起浏览器首次访问必须带一次性 token 的启动网址才能完成登录，因此优先用它；
+ * 拿不到启动网址（≤0.1.1、或复用外部已启动的服务）时回退到服务真实地址。
+ */
+function userDisplayUrl(): string | null {
   const s = manager?.getSnapshot();
-  if (!s || s.state !== 'ready' || !s.url) {
-    void vscode.window.showWarningMessage(t('info.notReady'));
-    return;
-  }
-  await vscode.env.openExternal(vscode.Uri.parse(s.url));
+  if (!s || s.state !== 'ready' || !s.url) return null;
+  return latestLaunchUrl ?? s.url;
 }
 
-/** 复制 DSH 页面地址到剪贴板 */
-async function copyUrl(): Promise<void> {
-  const s = manager?.getSnapshot();
-  if (!s || s.state !== 'ready' || !s.url) {
+async function openExternal(): Promise<void> {
+  const url = userDisplayUrl();
+  if (url === null) {
     void vscode.window.showWarningMessage(t('info.notReady'));
     return;
   }
-  await vscode.env.clipboard.writeText(s.url);
-  void vscode.window.showInformationMessage(t('info.urlCopied', { url: s.url }));
+  await vscode.env.openExternal(vscode.Uri.parse(url));
+}
+
+/** 复制 DSH 页面地址到剪贴板（优先带 token 的启动网址：贴进浏览器即可完成登录） */
+async function copyUrl(): Promise<void> {
+  const url = userDisplayUrl();
+  if (url === null) {
+    void vscode.window.showWarningMessage(t('info.notReady'));
+    return;
+  }
+  await vscode.env.clipboard.writeText(url);
+  void vscode.window.showInformationMessage(t('info.urlCopied', { url }));
 }
 
 /** 复制完整 DSH 日志（含环境信息头）到剪贴板：问题报告的提交内容 */

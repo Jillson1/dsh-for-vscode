@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initI18n, t } from '../src/i18n';
-import { loadingPage, errorPage, disconnectedPage, stoppedPage, readyPage, type PageCtx } from '../src/panel/html';
+import { loadingPage, errorPage, disconnectedPage, stoppedPage, readyPage, authRequiredPage, type PageCtx } from '../src/panel/html';
 
 function ctx(): PageCtx {
   return { nonce: 'abc123', cspSource: 'vscode-webview:', frameHosts: ['http://127.0.0.1:3080'] };
@@ -131,4 +131,65 @@ test('readyPage 握手脚本包含交互增强下行分支（4 条）', () => {
     assert.ok(html.includes(`type === '${type}'`), `应接收扩展宿主的 ${type}`);
     assert.ok(html.includes(`kind: '${kind}'`), `应把下行消息转发为 iframe 的 ${kind}`);
   }
+});
+
+// —— DSH ≥0.1.2 鉴权适配（S4）——
+test('authRequiredPage：含说明、输入框、提交按钮与提交脚本（复用公共段 vscode）', () => {
+  initI18n('zh-cn');
+  const html = authRequiredPage(t, ctx());
+  assert.ok(html.includes('id="auth-url-input"'), '应有启动网址输入框');
+  assert.ok(html.includes('id="auth-submit"'), '应有提交按钮');
+  assert.ok(html.includes(t('panel.authTitle')));
+  assert.ok(html.includes(t('panel.authExplain')));
+  assert.ok(html.includes("type: 'authSubmitLaunchUrl'"), '提交脚本应 postMessage authSubmitLaunchUrl');
+  // 提交内容是用户粘贴的原文，扩展侧负责抠 URL 与校 authority
+  assert.ok(html.includes('url: url'));
+});
+
+test('防回归：acquireVsCodeApi 每页恰好一次（重复声明会让整段脚本失效）', () => {
+  initI18n('zh-cn');
+  const pages = [
+    loadingPage(t, ctx()),
+    errorPage(t, ctx(), 'x'),
+    disconnectedPage(t, ctx()),
+    stoppedPage(t, ctx()),
+    authRequiredPage(t, ctx()),
+    readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok', enabled: true }),
+  ];
+  for (const html of pages) {
+    const n = html.split('acquireVsCodeApi()').length - 1;
+    assert.equal(n, 1, `每个页面必须恰好声明一次 vscode 实例，实际 ${n} 次`);
+  }
+});
+
+test('握手脚本四件套（3f23898）：下行 targetOrigin 统一为通配，不再缓存 iframeSrc', () => {
+  const html = readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok', enabled: true });
+  // 下行一律 '*'：接收窗口已由 iframeEl.contentWindow 锁定，hello 自带 token 防伪；
+  // 用 iframe.src 推导的 origin 作 targetOrigin 会在 webview SW 重写 origin 时直接抛错
+  assert.ok(!html.includes('iframeSrc'), '不得再缓存 iframeEl.src 作为 targetOrigin');
+  assert.ok(html.includes("}, '*')"), "下行 postMessage 应使用 '*'");
+});
+
+test('握手脚本四件套：上行用 isAllowedBridgeOrigin 兼容 SW 重写与 loopback 互换', () => {
+  const html = readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok', enabled: true });
+  assert.ok(html.includes('isAllowedBridgeOrigin'), '应引入来源判定函数');
+  assert.ok(html.includes("o.startsWith('vscode-webview://')"), '应放行 webview SW 重写后的载体 origin');
+  assert.ok(html.includes("h === 'localhost'"), '应兼容 127.0.0.1 ↔ localhost 等价写法');
+  // 上行改为「source 限定 + 来源判定」，不再是严格相等
+  assert.ok(html.includes('if (e.source !== iframeEl.contentWindow || !isAllowedBridgeOrigin(e.origin)) return;'));
+  assert.ok(!html.includes('if (e.origin !== ALLOWED_ORIGIN'), '不再用严格 origin 相等（会静默拒掉全部上行）');
+});
+
+test('握手脚本四件套：hello 不挂 load 事件且重试 15 秒（60 次 × 250ms）', () => {
+  const html = readyPage('http://127.0.0.1:3080/', ctx(), { token: 'tok', enabled: true });
+  assert.ok(!html.includes("addEventListener('load'"), 'hello 不得挂在 load 事件上（本机直连会错过事件）');
+  assert.ok(html.includes('helloAttempts > 60'), '重试上限应为 60 次（15 秒）');
+});
+
+test('readyPage 的握手 allowedOrigin 跟随传入 url（鉴权下即代理地址）', () => {
+  // 这是「CSP / iframe src / allowedOrigin 单一推导」的关键一半：
+  // provider 把 frameUrl（可能是代理地址）传进来，握手脚本必须按它推导 origin。
+  const proxyUrl = 'http://127.0.0.1:51234/';
+  const html = readyPage(proxyUrl, ctx(), { token: 'tok', enabled: true });
+  assert.ok(html.includes('"http://127.0.0.1:51234"'), 'allowedOrigin 应为代理地址的 origin');
 });

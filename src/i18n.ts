@@ -52,6 +52,23 @@ const messages = {
     'addToDsh.notReady': 'DSH panel is not open. Open the DSH panel first, then try again.',
     'addToDsh.injected': 'Added to DSH input box.',
     'msg.viewChanges': 'View',
+    // DSH ≥0.1.2 browser auth: sign-in guide page + notifications
+    'panel.authTitle': 'Sign in to DSH',
+    'panel.authExplain':
+      'This DSH service requires browser sign-in and was not started by the extension (or its sign-in URL is no longer valid), so the panel cannot sign in automatically. Paste the URL printed by dsh web at startup to sign in once — the session lasts up to 30 days.',
+    'panel.authStep1':
+      "Find the line starting with 'dsh web: http://…/?token=…' in the DSH service log (terminal output; for a systemd service run 'journalctl -u dsh -n 100').",
+    'panel.authStep2': 'Paste the whole URL below and click Sign In.',
+    'panel.authPlaceholder': 'dsh web: http://127.0.0.1:3080/?token=…',
+    'panel.authHint': 'The URL is used once to exchange a session and is never saved to logs.',
+    'panel.authSubmit': 'Sign In',
+    'panel.authSubmitting': 'Signing in…',
+    'msg.authBadUrl':
+      'That does not look like a dsh web launch URL (expected: dsh web: http://127.0.0.1:<port>/?token=…). Copy it from the DSH service log.',
+    'msg.authRejected': 'Sign-in failed: {reason}',
+    'msg.authOk': 'Signed in to DSH. The session stays valid for up to 30 days.',
+    'msg.authMismatch':
+      'The URL points to {urlHost}, but the running DSH service is at {targetHost}. Copy the URL from this service log.',
   },
   zh: {
     'panel.loading': '正在启动 DSH 服务…',
@@ -96,6 +113,22 @@ const messages = {
     'addToDsh.notReady': 'DSH 面板未打开。请先打开 DSH 面板再重试。',
     'addToDsh.injected': '已添加到 DSH 输入框。',
     'msg.viewChanges': '查看',
+    // DSH ≥0.1.2 浏览器鉴权：登录引导页与提示
+    'panel.authTitle': 'DSH 需要登录',
+    'panel.authExplain':
+      '这个 DSH 服务需要浏览器登录，且不是由本扩展启动的（或它的登录网址已失效），扩展无法自动完成登录。请把 dsh web 启动时打印的网址粘贴到下方完成一次登录——会话最长 30 天有效。',
+    'panel.authStep1':
+      '在 DSH 服务日志中找到以 dsh web: http://…/?token=… 开头的那一行（终端输出；systemd 服务可运行 journalctl -u dsh -n 100）。',
+    'panel.authStep2': '把整条网址粘贴到下方，点击「登录」。',
+    'panel.authPlaceholder': 'dsh web: http://127.0.0.1:3080/?token=…',
+    'panel.authHint': '该网址只用于兑换一次会话，不会写入日志或保存。',
+    'panel.authSubmit': '登录',
+    'panel.authSubmitting': '正在登录…',
+    'msg.authBadUrl':
+      '这不像 dsh web 的启动网址（应为 dsh web: http://127.0.0.1:<端口>/?token=…）。请从 DSH 服务日志中复制。',
+    'msg.authRejected': '登录失败：{reason}',
+    'msg.authOk': 'DSH 登录成功，会话最长 30 天有效。',
+    'msg.authMismatch': '网址指向 {urlHost}，但正在运行的 DSH 服务在 {targetHost}。请从该服务的日志中复制网址。',
   },
 } as const;
 
