@@ -42,6 +42,12 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
   private wasConnected = false;
   /** 面板是否已首次打开过（用于一次性回调） */
   private openedOnce = false;
+  /**
+   * 本页桥接握手结果（undefined = 本页尚未握手；true/false = 握手成败）。
+   * 每次 render() 重建页面时重置——新页面里的桥接必须重新握手，
+   * 否则"旧页面握过手"会被误判为"新页面已就绪"，下行消息会落进空窗被丢弃。
+   */
+  private lastAckOk: boolean | undefined = undefined;
   /** 桥接握手 token：一次性防伪凭据，用密码学随机数（不可预测） */
   private readonly bridgeToken = randomUUID();
 
@@ -110,14 +116,59 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
     return this.view !== null && this.view.visible === true;
   }
 
-  injectComposer(text: string): boolean {
-    return this.postToPage({ type: 'bridgeInjectComposer', text });
+  /** 面板是否已创建（曾打开过）。自动打开时用它沿用用户用过的那一侧，避免"每次都在另一边冒出来" */
+  hasView(): boolean {
+    return this.view !== null;
+  }
+
+  /**
+   * 面板是否已就绪：**可见 + 本页桥接握手成功**。
+   * 下行消息（注入 composer / Quick Edit / 审批回执）只有在这个状态下投递才保证送达——
+   * 桥接未 materialize 之前投递会被 iframe 侧的监听器错过，表现为"点了没反应"。
+   */
+  isReady(): boolean {
+    return this.lastAckOk === true && this.isVisible();
+  }
+
+  /**
+   * 等待面板就绪（可见 + 桥接握手成功），超时返回 false。
+   *
+   * 为什么需要它：面板刚被打开时 iframe 才刚开始加载，桥接客户端要 1~3 秒才
+   * materialize（服务冷启动可达 10 秒）。此刻直接 postMessage 会落在页面脚本装好监听之前，
+   * 消息被静默丢弃。自动打开链路因此必须等握手回执，而不是"命令执行完就投"。
+   */
+  waitUntilReady(timeoutMs: number): Promise<boolean> {
+    if (this.isReady()) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const deadline = Date.now() + Math.max(0, timeoutMs);
+      const timer = setInterval(() => {
+        if (this.isReady()) {
+          clearInterval(timer);
+          resolve(true);
+          return;
+        }
+        // 明确"等下去也不会就绪"的状态：登录引导页（要用户粘贴启动网址）或服务启动失败。
+        // 早退比让用户盯着一个 20 秒后才出现的错误提示更诚实。
+        if (this.ui.authState?.() === 'needed' || this.manager.getSnapshot().state === 'failed') {
+          clearInterval(timer);
+          resolve(false);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          clearInterval(timer);
+          resolve(false);
+        }
+      }, 100);
+    });
   }
 
   /**
    * 向 DSH 页面投递下行消息（bridge 0.4.0 通用入口）。
    * 顶层握手脚本按 type 翻译成桥接 kind 转给 iframe，桥接校验后加 `dsh-file-jump:` 前缀交给插件。
    * 仅当面板可见且 webview 就绪时投递；返回 false 表示当前不可投递，调用方据此提示用户。
+   *
+   * 注意：可见 ≠ 就绪。跨"面板刚被打开"的投递必须先用 isReady()/waitUntilReady() 把关，
+   * 否则消息会落在 iframe 的监听器装好之前被丢弃（Add to DSH 的自动打开链路就是这样的场景）。
    */
   postToPage(msg: PanelDownlink): boolean {
     if (!this.view || this.view.visible !== true) return false;
@@ -179,7 +230,9 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
         void this.diffService?.record(msg);
         break;
       case 'bridgeAck':
-        // 握手回执：通知注入的回调（Task 7 据此评估桥接状态；0.4.0 起附带能力表）
+        // 握手回执：先记录本页就绪状态（自动打开后的投递要等它），再通知注入的回调
+        // （Task 7 据此评估桥接状态；0.4.0 起附带能力表）
+        this.lastAckOk = msg.ok === true;
         this.onBridgeAck?.(msg.ok, msg.capabilities);
         break;
     }
@@ -266,6 +319,8 @@ export class DshPanelProvider implements vscode.WebviewViewProvider {
   private render(): void {
     const v = this.view;
     if (!v) return;
+    // 每次渲染都会整体替换 webview 文档（含 iframe）→ 旧页面的握手作废，等新页面重新回执
+    this.lastAckOk = undefined;
     const nonce = Math.random().toString(36).slice(2);
     const { host, port } = this.manager.getTarget();
     const ctx: PageCtx = { nonce, cspSource: v.webview.cspSource, frameHosts: [`http://${host}:${port}`] };

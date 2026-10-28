@@ -21,7 +21,8 @@ import { createDshProxy, type DshProxy } from './service/proxy';
 import { DshPanelProvider, type PanelProviderUiOpts } from './panel/provider';
 import { AgentStatusController, StatusBarController } from './statusbar';
 import { resolveWorkspaceRoot } from './workspaceRoot';
-import { addFileToDsh, addSelectionToDsh, type AddToDshTargets } from './addToDsh';
+import { addFileToDsh, addSelectionToDsh } from './addToDsh';
+import { pickPanelSide, type PanelSide } from './panel/panel-side';
 import {
   installBridge,
   uninstallBridge,
@@ -59,7 +60,7 @@ import {
   registerCheckpointContent,
   showCheckpointDiff,
 } from './checkpoints/checkpoint-content';
-import type { CheckpointsReadyMsg } from './panel/html';
+import type { CheckpointsReadyMsg, PanelDownlink } from './panel/html';
 import {
   SELECTION_CONTROLLER_ID,
   SELECTION_THREAD_CONTEXT,
@@ -1303,7 +1304,7 @@ ${sample}${more}`,
         }
         return choice === SEND;
       },
-      send: (message) => panelPrimary.postToPage(message) || panelSecondary.postToPage(message),
+      send: (message) => postToPanelDsh(message),
       notify: (m) => void vscode.window.showInformationMessage(m),
       log: (m) => appendLog(`[quickEdit] ${m}`),
     });
@@ -1442,6 +1443,70 @@ ${sample}${more}`,
   refreshAuthPanels = () => {
     for (const p of panels) p.refresh();
   };
+
+  // —— 面板下行投递（面板未就绪时自动打开）——
+
+  /**
+   * 自动打开面板后等待"就绪"的上限。
+   * 覆盖：视图创建 + iframe 加载 + 桥接 materialize（实测 1~3s）+ 服务冷启动（实测可达 ~10s）。
+   * 超时就如实报告失败，绝不假装已送达。
+   */
+  const PANEL_READY_TIMEOUT_MS = 20_000;
+
+  /**
+   * 聚焦指定一侧面板，返回**真正被聚焦**的一侧。
+   * 旧版 VS Code（<1.91）没有辅助侧边栏视图 → 请求右侧时退化为主面板（有总比没有强）。
+   */
+  async function focusPanelSide(side: PanelSide): Promise<PanelSide | null> {
+    const cmds = await vscode.commands.getCommands(true);
+    if (side === 'secondary' && cmds.includes('dsh.panel.secondary.focus')) {
+      await vscode.commands.executeCommand('dsh.panel.secondary.focus');
+      return 'secondary';
+    }
+    if (cmds.includes('dsh.panel.focus')) {
+      await vscode.commands.executeCommand('dsh.panel.focus');
+      return 'primary';
+    }
+    return null;
+  }
+
+  /**
+   * 向 DSH 页面投递一条下行消息（Add to DSH / Quick Edit 共用）。
+   *
+   * 真机反馈驱动的行为：面板没打开时**先自动打开再投递**，而不是让用户"先去开面板"。
+   * 三步：
+   *   ① 已有就绪面板（可见且本页握手成功）→ 直接投递（零延迟，行为与旧版一致）；
+   *   ② 否则自动打开面板（沿用用户用过的一侧；都没用过则右侧辅助侧边栏，
+   *      与 Claude Code 的 chat 面板一致），并**等桥接握手完成**再投；
+   *   ③ 打不开 / 超时 → 返回 false，由调用方给出明确提示（绝不冒充"已添加"）。
+   *
+   * 为什么不能"打开后立刻投"：面板刚打开时 iframe 还在加载，桥接尚未装好监听，
+   * postMessage 会被静默丢弃——用户看到的是"点了没反应"（这正是本函数存在的意义）。
+   */
+  async function postToPanelDsh(message: PanelDownlink): Promise<boolean> {
+    for (const p of panels) {
+      if (p.isReady()) return p.postToPage(message);
+    }
+    // 面板没开（或可见但桥接未就绪）：自动打开用户用过的一侧；都没用过则右侧
+    const side = pickPanelSide({
+      primary: panelPrimary.hasView(),
+      secondary: panelSecondary.hasView(),
+    });
+    appendLog(`[panel] 面板未就绪，自动打开${side === 'secondary' ? '右侧辅助侧边栏' : '左侧活动栏'}面板`);
+    const focused = await focusPanelSide(side);
+    if (focused === null) {
+      appendLog('[panel] 自动打开失败：找不到面板视图的聚焦命令');
+      return false;
+    }
+    const target = focused === 'secondary' ? panelSecondary : panelPrimary;
+    const ready = await target.waitUntilReady(PANEL_READY_TIMEOUT_MS);
+    if (!ready) {
+      appendLog(`[panel] 面板已打开，但 ${PANEL_READY_TIMEOUT_MS}ms 内未完成桥接握手，消息未投递`);
+      return false;
+    }
+    return target.postToPage(message);
+  }
+
   new StatusBarController(manager);
   // F7：agent 状态项（与"服务状态"分开：一个是进程活着，一个是 agent 在干什么）
   const agentStatus = new AgentStatusController();
@@ -1519,15 +1584,14 @@ ${sample}${more}`,
     vscode.commands.registerCommand('dsh.bridge.uninstall', () => void uninstallBridgeCmd()),
     // —— Add to DSH：右键文件/选区 → 注入文件引用到 DSH 输入框 ——
     // explorer/context 会把 resource 作为 uri 参数传入；无 uri 时回退活动编辑器文档。
+    // 注入器 = postToPanelDsh：面板没打开时会**自动先打开**再投递（真机反馈对齐 Claude Code）。
     vscode.commands.registerCommand('dsh.addFileToDsh', (uri?: vscode.Uri) => {
       const target = uri ?? vscode.window.activeTextEditor?.document.uri;
       if (!target) return;
-      const targets: AddToDshTargets = { providers: [panelPrimary, panelSecondary] };
-      void addFileToDsh(target, targets);
+      void addFileToDsh(target, (text) => postToPanelDsh({ type: 'bridgeInjectComposer', text }));
     }),
     vscode.commands.registerCommand('dsh.addSelectionToDsh', () => {
-      const targets: AddToDshTargets = { providers: [panelPrimary, panelSecondary] };
-      void addSelectionToDsh(targets);
+      void addSelectionToDsh((text) => postToPanelDsh({ type: 'bridgeInjectComposer', text }));
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('dsh')) onConfigChanged();
@@ -1611,7 +1675,7 @@ ${sample}${more}`,
     }),
     // 与既有 dsh.addSelectionToDsh 同一个实现（评论线程标题按钮用它）
     vscode.commands.registerCommand('dsh.selection.addToDsh', () =>
-      void addSelectionToDsh({ providers: [panelPrimary, panelSecondary] }),
+      void addSelectionToDsh((text) => postToPanelDsh({ type: 'bridgeInjectComposer', text })),
     ),
     // —— F9 检查点：视图 / 内容提供者 / 命令 ——
     checkpointsView,

@@ -14,8 +14,8 @@ export interface QuickEditSenderDeps {
   confirmBeforeSend(): boolean
   /** 弹确认框（返回 true = 用户确认发送） */
   confirm(text: string): Promise<boolean>
-  /** 下发给 iframe（生产 = provider.postToPage；false = 面板不可达） */
-  send(message: PanelDownlink): boolean
+  /** 下发给 iframe（生产 = postToPanelDsh：面板未就绪时自动打开并等待握手；false = 不可达） */
+  send(message: PanelDownlink): boolean | Promise<boolean>
   /** 用户可见提示 */
   notify(message: string): void
   log?(message: string): void
@@ -48,10 +48,10 @@ export async function sendQuickEdit(
       return 'cancelled'
     }
   }
-  const sent = deps.send(quickEditDownlink(info, trimmed))
+  const sent = await deps.send(quickEditDownlink(info, trimmed))
   if (!sent) {
-    deps.log?.('quickEdit: 下行不可达，指令未送达')
-    deps.notify('DSH 面板当前不可见，指令未能发送；请先打开 DSH 面板')
+    deps.log?.('quickEdit: 下行不可达（面板未能打开或桥接未就绪），指令未送达')
+    deps.notify('DSH 面板未能打开或未就绪，指令未能发送；请稍后重试')
     return 'unreachable'
   }
   deps.log?.(`quickEdit: 已发送 ${info.pathRef} → ${trimmed.slice(0, 40)}`)

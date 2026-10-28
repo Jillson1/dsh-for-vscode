@@ -49,8 +49,9 @@ const messages = {
     'bridge.uninstalled': 'DSH bridge uninstalled. Restart the DSH service for the change to take effect.',
     'bridge.uninstallFailed': 'Failed to uninstall DSH bridge: {message}',
     // Add to DSH
-    'addToDsh.notReady': 'DSH panel is not open. Open the DSH panel first, then try again.',
-    'addToDsh.injected': 'Added to DSH input box.',
+    'addToDsh.notReady':
+      'Could not open the DSH panel, so the reference was not added. Open the DSH panel manually and try again.',
+    'addToDsh.noEditor': 'Open a file first, then add it to DSH.',
     'msg.viewChanges': 'View',
     // DSH ≥0.1.2 browser auth: sign-in guide page + notifications
     'panel.authTitle': 'Sign in to DSH',
@@ -110,8 +111,8 @@ const messages = {
     'bridge.uninstalled': 'DSH 桥接已卸载，重启 DSH 服务后生效。',
     'bridge.uninstallFailed': '卸载 DSH 桥接失败：{message}',
     // Add to DSH
-    'addToDsh.notReady': 'DSH 面板未打开。请先打开 DSH 面板再重试。',
-    'addToDsh.injected': '已添加到 DSH 输入框。',
+    'addToDsh.notReady': '无法打开 DSH 面板，引用未添加。请手动打开 DSH 面板后再试。',
+    'addToDsh.noEditor': '请先打开一个文件再添加到 DSH。',
     'msg.viewChanges': '查看',
     // DSH ≥0.1.2 浏览器鉴权：登录引导页与提示
     'panel.authTitle': 'DSH 需要登录',
