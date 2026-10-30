@@ -1,3 +1,24 @@
+## [0.3.7] - 2026-10-30
+
+> 同事实测反馈：DSH 切到 `deepseek-v4.1-flash` 后，点模型下拉报「无法打开文件」，下拉也打不开。
+
+### 修复
+
+- **桥接点击拦截把模型切换按钮误判为文件路径**（bridge `0.4.2 → 0.4.3`）。
+  模型座位按钮是 `button[type="button"][title][aria-label]`，`title` 是模型显示名
+  （如 `deepseek/deepseek-v4.1-flash · Default`），模型名带点（`v4.1`）时命中
+  `looksLikeFilePath` 的「路径段含点」规则（`/\/[^/]*\.[^/]+$/`）→ 点击被转发成
+  `openFile`，VS Code 报「无法打开文件」。修复：该按钮 `aria-label` 固定以
+  「选择模型」/「Select model」开头，命中即整体放行（与语言、模型名无关）。
+- **修掉先取值后判空的空指针崩溃**：工具卡片 `fileLink` 按钮不带 `title`/`aria-label`，
+  `closest` 返回 `null`；按同事补丁原样会抛 `TypeError` 并吞掉紧随其后的 fileLink 分支
+  （表现为工具卡片路径点击失效）。改为先判空再读取属性。
+
+### 版本
+
+- 扩展 `0.3.6 → 0.3.7`；桥接 `0.4.2 → 0.4.3`（**必须 bump**，否则 profile 不重装、修复不生效）。
+- 安装后需 `Developer: Reload Window` 一次。
+
 ## [0.3.6] - 2026-10-28
 
 ### 变更
