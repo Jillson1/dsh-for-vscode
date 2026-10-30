@@ -399,15 +399,24 @@ window.__ModuleLoader__.load({
         }
         // 文件路径按钮（fileMention）：button[type="button"] 且同时带 title + aria-label。
         // 注意：DSH 的模型切换按钮（composer model seat）同样是
-        // button[type="button"][title][aria-label]，但其 title/aria-label 是模型显示名
-        // （如 "deepseek-v4-flash-0731 (Vision Toolkit) · Default"），不含路径特征，
-        // 必须放行交给 DSH 处理，否则会被误当成文件路径去打开 → 报"文件不存在"。
+        // button[type="button"][title][aria-label]，但其 title 是模型显示名
+        // （如 "deepseek/deepseek-v4.1-flash · Default"），不含路径特征时本可放行；
+        // 而模型名带点（v4.1）会被 looksLikeFilePath 的"路径段含点"规则误判为路径，
+        // 点开模型下拉反而报"无法打开文件"。该按钮 aria-label 固定以
+        // "选择模型"/"Select model" 开头，按它整体放行（语言/模型名都无关）。
         const btn = target.closest("button[type='button'][title][aria-label]");
-        if (btn && looksLikeFilePath(btn.getAttribute("title") || btn.getAttribute("aria-label") || "")) {
-          e.preventDefault();
-          e.stopPropagation();
-          parent.postMessage(buildOpenFileFromButton(btn), "*");
-          return;
+        if (btn) {
+          // 先判空再取值：工具卡片的 fileLink 按钮**不带** title/aria-label，
+          // closest 在这里返回 null —— 先取值会抛异常并吞掉下面的 fileLink 分支
+          // （表现为"点工具卡片路径没反应"）。
+          const seatLabel = (btn.getAttribute("aria-label") || "").trim().toLowerCase();
+          const isModelSeat = seatLabel.startsWith("选择模型") || seatLabel.startsWith("select model");
+          if (!isModelSeat && looksLikeFilePath(btn.getAttribute("title") || btn.getAttribute("aria-label") || "")) {
+            e.preventDefault();
+            e.stopPropagation();
+            parent.postMessage(buildOpenFileFromButton(btn), "*");
+            return;
+          }
         }
         // 工具卡片上的文件路径（fileLink）：button[type="button"] 且混淆类名含 fileLink 后缀
         const fileLinkBtn = target.closest("button[type='button'][class*='fileLink']");

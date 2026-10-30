@@ -23,6 +23,8 @@ interface BridgeEnv {
   readonly toPlugin: unknown[];
   /** 派发 window 事件（如握手、上行 CustomEvent） */
   fire(type: string, event: unknown): void;
+  /** 派发 document 事件（点击拦截绑定在 document 捕获阶段） */
+  fireDocument(type: string, event: unknown): void;
 }
 
 /** 最小 DOM 桩：只实现 client.js 工厂体真正触及的部分 */
@@ -79,6 +81,9 @@ function createEnv(loadCode: string): BridgeEnv {
     toPlugin,
     fire: (type, event) => {
       for (const fn of windowListeners.get(type) ?? []) fn(event);
+    },
+    fireDocument: (type, event) => {
+      for (const fn of documentListeners.get(type) ?? []) fn(event);
     },
   };
 }
@@ -203,5 +208,70 @@ test('未握手时不转发任何消息（普通浏览器打开 DSH 页面不应
       detail: { path: 'E:/a.ts', diffs: [{ oldText: 'x', newText: 'y' }], callId: 'c1' },
     });
     assert.deepEqual(env.toParent, []);
+  });
+});
+
+/** 假按钮：实现 getAttribute/textContent（buildOpenFileFromButton 只用到这些） */
+function fakeButton(attrs: Record<string, string | null>, text = ''): unknown {
+  return {
+    getAttribute: (name: string) => attrs[name] ?? null,
+    textContent: text,
+  };
+}
+
+/** 假点击目标：按选择器返回不同按钮，模拟真实 DOM 的 closest 语义 */
+function fakeTarget(parts: { mention?: unknown; fileLink?: unknown }): unknown {
+  return {
+    closest: (selector: string) => {
+      if (selector === 'a') return null;
+      if (selector.includes("class*='fileLink'")) return parts.fileLink ?? null;
+      if (selector.includes('[title][aria-label]')) return parts.mention ?? null;
+      return null;
+    },
+  };
+}
+
+function clickEvent(target: unknown): unknown {
+  return { target, preventDefault() {}, stopPropagation() {} };
+}
+
+test('点击拦截：模型座位放行；fileMention / fileLink 不受影响（含 null 目标回归）', () => {
+  withBuiltBridge((env) => {
+    env.fire('message', HANDSHAKE);
+    env.toParent.length = 0;
+
+    // ① 模型切换按钮：title 是带点的模型显示名（deepseek-v4.1-flash）。
+    //    修复前会被 "路径段含点" 规则误判 → 转发 openFile → VS Code 报"无法打开文件"。
+    const modelSeat = fakeButton({
+      title: 'deepseek/deepseek-v4.1-flash · Default',
+      'aria-label': '选择模型，当前 deepseek/deepseek-v4.1-flash',
+    });
+    assert.doesNotThrow(() => env.fireDocument('click', clickEvent(fakeTarget({ mention: modelSeat }))));
+    assert.deepEqual(env.toParent, [], '模型座位点击不得产生 openFile（也不得抛异常）');
+
+    // 英文界面同样放行（Select model, current ...）
+    const modelSeatEn = fakeButton({
+      title: 'deepseek/deepseek-v4.1-flash · Default',
+      'aria-label': 'Select model, current deepseek/deepseek-v4.1-flash',
+    });
+    env.fireDocument('click', clickEvent(fakeTarget({ mention: modelSeatEn })));
+    assert.deepEqual(env.toParent, [], '英文 locale 下的模型座位同样放行');
+
+    // ② fileMention 回归：title 为完整路径时照常转发 openFile
+    const mention = fakeButton({
+      title: 'E:\codee\a.ts',
+      'aria-label': '打开 E:\codee\a.ts',
+    });
+    env.fireDocument('click', clickEvent(fakeTarget({ mention })));
+    assert.equal((env.toParent[0] as { kind?: string }).kind, 'openFile');
+    assert.equal((env.toParent[0] as { path?: string }).path, 'E:\codee\a.ts');
+
+    // ③ 工具卡片 fileLink 回归：该按钮不带 title/aria-label → 第一个 closest 返回 null。
+    //    若实现"先取值后判空"会在这里抛异常并吞掉 fileLink 分支（同事补丁原样的缺陷）。
+    env.toParent.length = 0;
+    const fileLink = fakeButton({ 'data-abs-path': 'E:\codee\b.ts' }, 'b.ts');
+    assert.doesNotThrow(() => env.fireDocument('click', clickEvent(fakeTarget({ fileLink }))));
+    assert.equal((env.toParent[0] as { kind?: string }).kind, 'openFile');
+    assert.equal((env.toParent[0] as { path?: string }).path, 'E:\codee\b.ts');
   });
 });
