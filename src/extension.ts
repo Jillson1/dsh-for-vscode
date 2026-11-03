@@ -67,6 +67,7 @@ import {
   SelectionThreadController,
 } from './selection/selection-thread';
 import { sendQuickEdit } from './selection/quick-edit';
+import { SelectionBurstGate } from './selection/selection-burst-gate';
 import { classifySelectionOrigin, selectionThreadsMuted } from './editorReveal';
 import type { SelectionInfo } from './selection/selection-model';
 import { revealLineInEditor } from './editorReveal';
@@ -1356,17 +1357,22 @@ ${sample}${more}`,
   // `comments/commentThread/context` 贡献点并接回回复处理（Comments API **没有**
   // `onDidSubmitCommentReply` 事件，只能靠菜单命令的实参传递文本）。
 
-  // 选区变化：清线程（避免线程挂在不相关的文件上）
-  // 同时刷新选区工具条（CodeLens）：选区一变就让 VS Code 重取那两个按钮。
-  // 防抖理由与线程一致：拖选过程中选区事件每秒触发几十次，逐次重算会让按钮行抖动。
-  let lensTimer: ReturnType<typeof setTimeout> | undefined;
-  const refreshSelectionLens = (): void => {
-    if (lensTimer !== undefined) clearTimeout(lensTimer);
-    lensTimer = setTimeout(() => {
-      lensTimer = undefined;
-      selectionLenses.refresh();
-    }, 120);
+  // 选区变化：清线程（避免线程挂在不相关的文件上）+ 刷新选区工具条（CodeLens）。
+  //
+  // —— 方案 A（2026-10-30 真机反馈）：拖选冻结 + 静默触发 ——
+  // 真机问题：划选一开始工具条就弹出；CodeLens 占一整行高，弹出/移除都把内容推移，
+  // 拖动中的“那一行”位移 → 选区选错行。根因：旧实现只有 120ms 尾防抖不是冻结，
+  // 拖选中途任何停顿 ≥120ms 都会重挂；旧工具条的移除同样落在拖选中途。
+  // 扩展宿主拿不到鼠标 down/up（mouseup 时选区不变、不发事件），只能用事件流近似：
+  //   Mouse/Keyboard → 冻结（只记 pending），事件流静默 adaptiveSettleMs ≈ 抬起后 → 统一重算
+  //   （自适应窗 = 1.5×当前划选节奏，[300ms, 1.2s]，并记住上一轮节奏让慢划的第一间隙也不提前弹）；
+  //   Command（程序化补发）→ 冻结期忽略；空闲期沿用旧 120ms 防抖（拖选收尾补发即“抬起加速器”）。
+  // 残余边界：停顿超过 ~1.5×自己节奏（封顶 1.2s）仍会弹出（停顿与抬起在事件流上不可区分）。
+  const refreshSelectionArtifacts = (): void => {
+    selectionThreads.onSelectionChanged(); // 只清不建（拖选中被冻结，到这里才真正 dispose）
+    selectionLenses.refresh();
   };
+  const selectionGate = new SelectionBurstGate(refreshSelectionArtifacts);
   const selectionSubscription = vscode.window.onDidChangeTextEditorSelection((e) => {
     // 记录来源：工具条据此区分"用户选的"与"我们跳行设的"（后者不出工具条）。
     // **只在本次事件提供信息时更新**——VS Code 会补发大量 kind=Command 的程序化事件
@@ -1374,15 +1380,16 @@ ${sample}${more}`,
     // 表现为按钮闪一下消失（真机缺陷 2026-09-18）。
     const origin = classifySelectionOrigin(e.kind, selectionThreadsMuted());
     if (origin !== null) selectionUserInitiated = origin;
-    selectionThreads.onSelectionChanged();
-    refreshSelectionLens();
+    // kind 编码与 classifySelectionOrigin 同源：keyboard=1 / mouse=2 / command=3
+    if (e.kind === 1 || e.kind === 2) selectionGate.onUserSelection();
+    else selectionGate.onCommand();
   });
   /** 切换活动编辑器：离散事件，立即重算（旧编辑器的按钮不该留在新文件上） */
   const activeEditorForLens = vscode.window.onDidChangeActiveTextEditor(() => {
     // 换文件后上一个文件的来源判定不再适用：VS Code 不会为"切过去的已有选区"补发用户事件，
     // 因此这里显式回到"未判定"，避免把上一个文件的用户选区状态带到新文件上。
     selectionUserInitiated = null;
-    selectionLenses.refresh();
+    selectionGate.onEditorSwitch();
   });
 
   /**
@@ -1657,6 +1664,7 @@ ${sample}${more}`,
     selectionSubscription,
     selectionController,
     selectionThreads,
+    selectionGate,
     vscode.commands.registerCommand('dsh.quickEdit.selection', () => void quickEditFromInput()),
     // 「Quick Edit」：**按需创建**线程并展开它 → 回复框（编辑器内输入框）出现，
     // 用户在框里写指令后点「发送到 DSH」。
